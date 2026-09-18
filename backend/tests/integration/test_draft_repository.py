@@ -35,16 +35,18 @@ async def prepared_db(db_engine: AsyncEngine):
         )
     yield db_engine
     async with db_engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.drop_all,
-            tables=[
-                DraftModel.__table__,
-                AttachmentModel.__table__,
-                EmailModel.__table__,
-                ThreadModel.__table__,
-                UserModel.__table__,
-            ],
-        )
+        for table_name in (
+            "compose_drafts",
+            "drafts",
+            "attachments",
+            "email_ai_understanding",
+            "email_chunks",
+            "emails",
+            "oauth_tokens",
+            "threads",
+            "users",
+        ):
+            await conn.execute(text(f'DROP TABLE IF EXISTS "{table_name}" CASCADE'))
         await conn.execute(text("DROP TYPE IF EXISTS user_status"))
         await conn.execute(text("DROP TYPE IF EXISTS draft_status"))
 
@@ -55,8 +57,12 @@ def session_factory(prepared_db: AsyncEngine) -> async_sessionmaker[AsyncSession
 
 
 @pytest.fixture
-def repo(session_factory: async_sessionmaker[AsyncSession]) -> DraftRepository:
-    return DraftRepository(session_factory())
+async def repo(session_factory: async_sessionmaker[AsyncSession]):
+    session = session_factory()
+    try:
+        yield DraftRepository(session)
+    finally:
+        await session.close()
 
 
 async def _create_user_and_email(

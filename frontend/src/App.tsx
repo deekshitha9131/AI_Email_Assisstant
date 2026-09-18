@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import ProtectedRoute from "@/components/auth/ProtectedRoute";
 import RedirectIfAuthenticated from "@/components/auth/RedirectIfAuthenticated";
 import Compose from "@/pages/Compose";
+import Drafts from "@/pages/Drafts";
 import Dashboard from "@/pages/Dashboard";
 import EmailDetail from "@/pages/EmailDetail";
 import Inbox from "@/pages/Inbox";
@@ -40,6 +41,14 @@ function App() {
         element={
           <ProtectedRoute>
             <Compose />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/drafts"
+        element={
+          <ProtectedRoute>
+            <Drafts />
           </ProtectedRoute>
         }
       />

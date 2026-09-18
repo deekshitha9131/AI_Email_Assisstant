@@ -16,7 +16,7 @@ from app.core.config import Settings
 from app.domain.entities.oauth_token import OAuthToken
 from app.domain.entities.user import User
 from app.domain.enums.user_status import UserStatus
-from app.domain.exceptions.gmail import GmailAPIError, GmailSyncRequiredError
+from app.domain.exceptions.gmail import GmailAPIError
 
 BASE_ENV = {
     "APP_ENV": "development",
@@ -94,6 +94,7 @@ class FakeGmailClient:
         self._page_index = 0
         self.list_history_calls: list[tuple[str, str | None]] = []
         self.raise_on_list_history: Exception | None = None
+        self.list_messages_calls: list[str | None] = []
 
     async def list_history(self, *, start_history_id: str, page_token: str | None = None):
         self.list_history_calls.append((start_history_id, page_token))
@@ -105,6 +106,13 @@ class FakeGmailClient:
 
     async def get_message(self, message_id: str, *, format: str = "full"):
         return self._messages_by_id[message_id]
+
+    async def list_messages(self, *, label_ids=None, page_token=None, max_results=100):
+        self.list_messages_calls.append(page_token)
+        return {"messages": []}
+
+    async def get_profile(self):
+        return {"historyId": "200"}
 
 
 class FakeUserRepository:
@@ -214,18 +222,22 @@ def _make_service(
     return service, user_repository, email_repository
 
 
-async def test_sync_incremental_requires_prior_history_id(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_sync_incremental_falls_back_to_initial_sync(monkeypatch: pytest.MonkeyPatch) -> None:
     user = _user()
     gmail_client = FakeGmailClient(history_pages=[], messages_by_id={})
-    service, _, _ = _make_service(
+    service, user_repo, _ = _make_service(
         monkeypatch,
         gmail_client=gmail_client,
         oauth_token=_oauth_token(user.id),
         gmail_history_id=None,
     )
 
-    with pytest.raises(GmailSyncRequiredError):
-        await service.sync_incremental(user)
+    summary = await service.sync_incremental(user)
+
+    assert summary.success is True
+    assert summary.history_id == "200"
+    assert gmail_client.list_messages_calls == [None]
+    assert user_repo.update_history_id_calls == ["200"]
 
 
 async def test_sync_incremental_success(monkeypatch: pytest.MonkeyPatch) -> None:

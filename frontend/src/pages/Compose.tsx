@@ -1,8 +1,16 @@
-﻿import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useCallback } from "react";
 
-import { generateEmailContent, gmailSend } from "@/api";
+import {
+  createComposeDraft,
+  generateEmailContent,
+  getAIStatus,
+  getComposeDraft,
+  gmailSend,
+  updateComposeDraft,
+} from "@/api";
+import { ApiError } from "@/api/client";
 
 type ComposeStatus = "idle" | "generating" | "saving" | "sending" | "success" | "error";
 
@@ -14,12 +22,65 @@ interface ComposeFormValues {
 
 function Compose() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [formValues, setFormValues] = useState<ComposeFormValues>({to: "", subject: "", body: ""});
   const [status, setStatus] = useState<ComposeStatus>("idle");
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [generatedBody, setGeneratedBody] = useState<string>("");
+  const [aiStatus, setAiStatus] = useState<string | null>(null);
+  const [draftId, setDraftId] = useState<string | null>(searchParams.get("draft"));
+
+  useEffect(() => {
+    let active = true;
+    void getAIStatus()
+      .then((result) => {
+        if (active) setAiStatus(result.status);
+      })
+      .catch(() => {
+        if (active) setAiStatus("provider_error");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const requestedDraftId = searchParams.get("draft");
+    if (!requestedDraftId) return;
+    let active = true;
+    void getComposeDraft(requestedDraftId)
+      .then((draft) => {
+        if (!active) return;
+        setDraftId(draft.id);
+        setFormValues({
+          to: draft.recipients.join(", "),
+          subject: draft.subject,
+          body: draft.body_text ?? draft.body_html ?? "",
+        });
+      })
+      .catch(() => {
+        if (active) {
+          setStatus("error");
+          setStatusMessage("Unable to load this draft. Please try again.");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [searchParams]);
 
   const handleGenerateAI = useCallback(async () => {
+    if (aiStatus && aiStatus !== "available") {
+      setStatusMessage(
+        aiStatus === "not_configured"
+          ? "AI is not configured. Set GROQ_API_KEY in backend/.env and restart the backend."
+          : aiStatus === "authentication_error"
+            ? "The AI provider rejected its API key. Check the backend configuration."
+            : "The AI service is temporarily unavailable. Please try again.",
+      );
+      setStatus("error");
+      return;
+    }
     if (!formValues.to && !formValues.subject && !formValues.body) {
       setStatusMessage("Please enter some content to generate from");
       setStatus("error");
@@ -45,37 +106,59 @@ function Compose() {
       }));
       setStatus("success");
       setStatusMessage("Email content generated successfully");
-    } catch (err: any) {
+    } catch (err) {
       console.error("Generation failed:", err);
       setStatus("error");
-      setStatusMessage("Failed to generate email content. Please try again.");
+      setStatusMessage(
+        err instanceof ApiError && [502, 529].includes(err.status)
+          ? "AI service is temporarily unavailable. Please try again."
+          : err instanceof ApiError && err.status === 503
+            ? "AI generation is not configured. Set GROQ_API_KEY in backend/.env and restart the backend."
+          : "Failed to generate email content. Please try again.",
+      );
     }
-  }, [formValues]);
+  }, [aiStatus, formValues]);
 
   const handleSaveDraft = useCallback(async () => {
-    if (!formValues.body.trim()) {
-      setStatusMessage("Cannot save empty draft");
-      setStatus("error");
-      return;
-    }
-
     setStatus("saving");
     setStatusMessage("Saving draft...");
     try {
-      // For MVP, we'll simulate draft saving
-      // In a full implementation, this would call the backend draft API
+      const payload = {
+        recipients: formValues.to
+          .split(",")
+          .map((recipient) => recipient.trim())
+          .filter(Boolean),
+        subject: formValues.subject.trim(),
+        body_text: formValues.body || null,
+      };
+      const savedDraft = draftId
+        ? await updateComposeDraft(draftId, payload)
+        : await createComposeDraft(payload);
+      setDraftId(savedDraft.id);
       setStatusMessage("Draft saved successfully");
       setStatus("success");
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Save failed:", err);
       setStatus("error");
       setStatusMessage("Failed to save draft. Please try again.");
     }
-  }, [formValues]);
+  }, [draftId, formValues]);
 
   const handleSend = useCallback(async () => {
-    if (!formValues.to.trim()) {
+    const recipient = formValues.to.trim();
+    const emailRegex = /^[^\s@]+(?:\.[^\s@]+)*@[^\s@]+(?:\.[^\s@]+)+$/;
+    if (!formValues.subject.trim()) {
+      setStatusMessage("Subject is required");
+      setStatus("error");
+      return;
+    }
+    if (!recipient) {
       setStatusMessage("To field is required");
+      setStatus("error");
+      return;
+    }
+    if (!emailRegex.test(recipient)) {
+      setStatusMessage("Please enter a valid email address");
       setStatus("error");
       return;
     }
@@ -90,14 +173,17 @@ function Compose() {
     setStatusMessage("Sending email...");
     try {
       // Send via Gmail API
-      await gmailSend({
-        to: [formValues.to],
+      const response = await gmailSend({
+        to: [recipient],
         subject: formValues.subject,
         body_text: formValues.body
       });
 
+      if (!response.success) {
+        throw new Error("Gmail did not accept the message for sending.");
+      }
       setStatus("success");
-      setStatusMessage("Email sent successfully!");
+      setStatusMessage("Email accepted for sending. Delivery is not guaranteed.");
 
       // Reset form after successful send
       setTimeout(() => {
@@ -106,7 +192,7 @@ function Compose() {
         setStatusMessage("");
         setGeneratedBody("");
       }, 2000);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Send failed:", err);
       setStatus("error");
       setStatusMessage("Failed to send email. Please try again.");
@@ -133,6 +219,7 @@ function Compose() {
             </svg>
             Back to Inbox
           </button>
+          <Link to="/drafts" className="text-sm text-gray-600 hover:text-gray-900">Drafts</Link>
           <h1 className="text-2xl font-bold text-gray-900">Compose Email</h1>
         </div>
 
@@ -198,10 +285,12 @@ function Compose() {
             <button
               type="button"
               onClick={handleGenerateAI}
-              disabled={status === "generating" || status === "sending"}
+              disabled={(aiStatus !== null && aiStatus !== "available") || status === "generating" || status === "sending"}
               className="flex-1 px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-800 font-medium rounded-lg transition-colors"
             >
-              {status === "generating" ? (
+              {aiStatus !== null && aiStatus !== "available" ? (
+                aiStatus === "not_configured" ? "AI not configured" : "AI temporarily unavailable"
+              ) : status === "generating" ? (
                 <>
                   <svg className="w-4 h-4 mr-2 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l4 4H6l4-4z" />

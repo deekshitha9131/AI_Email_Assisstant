@@ -6,6 +6,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.config import get_settings
 from app.core.request_context import get_request_id
 from app.domain.exceptions import DomainError
 
@@ -85,7 +86,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         request_id=request_id,
         exc_info=exc,
     )
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=_error_envelope(
             "INTERNAL_SERVER_ERROR",
@@ -93,3 +94,11 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
             request_id,
         ),
     )
+    # ServerErrorMiddleware renders unhandled exceptions outside the regular
+    # user middleware stack, so CORSMiddleware cannot add this header itself.
+    origin = request.headers.get("origin")
+    if origin in get_settings().cors_origins:
+        response.headers["access-control-allow-origin"] = origin
+        response.headers["access-control-allow-credentials"] = "true"
+        response.headers["vary"] = "Origin"
+    return response

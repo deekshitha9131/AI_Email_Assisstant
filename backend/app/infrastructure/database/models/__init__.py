@@ -1,4 +1,5 @@
 from app.infrastructure.database.models.attachment import AttachmentModel
+from app.infrastructure.database.models.compose_draft import ComposeDraftModel
 from app.infrastructure.database.models.draft import DraftModel
 from app.infrastructure.database.models.email import EmailModel
 from app.infrastructure.database.models.email_ai_understanding import EmailAIUnderstandingModel
@@ -13,6 +14,7 @@ __all__ = [
     "ThreadModel",
     "EmailModel",
     "AttachmentModel",
+    "ComposeDraftModel",
     "EmailAIUnderstandingModel",
     "EmailChunkModel",
     "DraftModel",

@@ -93,9 +93,13 @@ def test_incremental_sync_endpoint_returns_409_when_initial_sync_required(
         "No prior Gmail sync found for this account."
     )
 
-    response = unit_client.post("/api/v1/gmail/sync/incremental")
+    response = unit_client.post(
+        "/api/v1/gmail/sync/incremental",
+        headers={"Origin": "http://localhost:5173"},
+    )
 
     assert response.status_code == 409
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
     assert response.json()["error"]["code"] == "GMAIL_INITIAL_SYNC_REQUIRED"
 
 

@@ -102,6 +102,9 @@ class FakeGmailClient:
     async def get_message(self, message_id: str, *, format: str = "full"):
         return self._messages_by_id[message_id]
 
+    async def get_profile(self):
+        return {}
+
 
 class FakeUserRepository:
     def __init__(self, *, oauth_token: OAuthToken | None) -> None:
@@ -109,6 +112,9 @@ class FakeUserRepository:
 
     async def get_oauth_tokens(self, user_id) -> OAuthToken | None:
         return self._oauth_token
+
+    async def update_gmail_history_id(self, user_id, history_id: str) -> None:
+        return None
 
 
 class FakeThreadRepository:

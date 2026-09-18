@@ -1,3 +1,5 @@
+import DOMPurify from "dompurify";
+
 import type { EmailDetail } from "@/types";
 
 interface EmailDetailViewProps {
@@ -14,89 +16,99 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function EmailDetailView({ email }: EmailDetailViewProps) {
-  const bodyText = email.body_text ?? email.body_html ?? "(no body content)";
+function decodeHtmlEntities(value: string): string {
+  if (!/&(?:#\d+|#x[\da-f]+|[a-z][\da-z]+);/i.test(value)) return value;
+  const container = document.createElement("div");
+  container.innerHTML = value;
+  return container.textContent ?? value;
+}
+
+function HtmlBodyRenderer({ html }: { html: string }) {
+  const sanitizedHtml = DOMPurify.sanitize(html, {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ["embed", "form", "iframe", "object", "script", "style"],
+  });
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">
+    <div
+      className="email-html-body max-w-none break-words text-[15px] leading-7 text-gray-800"
+      dangerouslySetInnerHTML={{ __html: sanitizedHtml }}
+    />
+  );
+}
+
+function EmailDetailView({ email }: EmailDetailViewProps) {
+  const hasHtmlBody = Boolean(email.body_html);
+  const hasTextBody = Boolean(email.body_text);
+
+  return (
+    <article className="bg-white rounded-xl shadow-md overflow-hidden">
+      {/* Subject */}
+      <div className="px-6 pt-6 pb-4 border-b border-gray-100">
+        <h1 className="text-xl font-bold text-gray-900 leading-snug break-words">
           {email.subject ?? "(no subject)"}
         </h1>
-        <p className="text-gray-500">
-          {email.snippet}
-        </p>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <div className="bg-gray-50 p-4 rounded-lg">
-          <h3 className="text-sm font-medium text-gray-500 mb-2">
-            From
-          </h3>
-          <p className="text-gray-900">
-            {email.sender}
-          </p>
-        </div>
-        <div className="bg-gray-50 p-4 rounded-lg">
-          <h3 className="text-sm font-medium text-gray-500 mb-2">
-            To
-          </h3>
-          <p className="text-gray-900">
-            {email.recipients.length > 0 ? email.recipients.join(", ") : "(none)"}
-          </p>
-        </div>
-        {email.cc.length > 0 && (
-          <div className="bg-gray-50 p-4 rounded-lg">
-            <h3 className="text-sm font-medium text-gray-500 mb-2">
-              Cc
-            </h3>
-            <p className="text-gray-900">
-              {email.cc.join(", ")}
-            </p>
-          </div>
+        {email.snippet && (
+          <p className="mt-1 text-sm text-gray-500 line-clamp-2">{email.snippet}</p>
         )}
-        <div className="bg-gray-50 p-4 rounded-lg">
-          <h3 className="text-sm font-medium text-gray-500 mb-2">
-            Date
-          </h3>
-          <p className="text-gray-900">
-            {formatDate(email.received_at)}
-          </p>
+      </div>
+
+      {/* Header metadata */}
+      <div className="px-6 py-4 border-b border-gray-100 space-y-3 text-sm">
+        <div className="grid grid-cols-[4rem_minmax(0,1fr)] gap-x-3 gap-y-1">
+          <span className="font-medium text-gray-500">From</span>
+          <span className="text-gray-900 break-all">{email.sender}</span>
+          <span className="font-medium text-gray-500">To</span>
+          <span className="text-gray-900 break-all">
+            {email.recipients.length > 0 ? email.recipients.join(", ") : "(none)"}
+          </span>
+          {email.cc.length > 0 && (
+            <>
+              <span className="font-medium text-gray-500">Cc</span>
+              <span className="text-gray-900 break-all">{email.cc.join(", ")}</span>
+            </>
+          )}
+          <span className="font-medium text-gray-500">Date</span>
+          <time className="text-gray-900" dateTime={email.received_at}>{formatDate(email.received_at)}</time>
         </div>
       </div>
 
+      {/* Attachments */}
       {email.has_attachments && email.attachments.length > 0 && (
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900 mb-3">
-            Attachments
+        <div className="px-6 py-3 border-b border-gray-100">
+          <h2 className="text-sm font-semibold text-gray-700 mb-2">
+            Attachments ({email.attachments.length})
           </h2>
-          <div className="space-y-2">
+          <div className="flex flex-wrap gap-2">
             {email.attachments.map((attachment) => (
-              <div key={attachment.id} className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-md">
-                <div className="flex items-center">
-                  <svg className="w-4 h-4 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L18 14m-2-2l1.586-1.586a2 2 0 012.828 0L18 10m-2-2l1.586-1.586a2 2 0 012.828 0L18 6m-2-2l1.586-1.586a2 2 0 012.828 0L18 2" />
-                  </svg>
-                  <span className="font-medium">{attachment.filename}</span>
-                </div>
-                <div className="text-sm text-gray-500">
-                  {attachment.mime_type} — {formatSize(attachment.size)}
-                </div>
+              <div key={attachment.id} className="inline-flex items-center px-3 py-1.5 bg-gray-50 rounded-md text-sm">
+                <svg className="w-4 h-4 mr-1.5 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                </svg>
+                <span className="font-medium text-gray-700">{attachment.filename}</span>
+                <span className="ml-2 text-gray-400">{formatSize(attachment.size)}</span>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      <div className="pt-4 border-t border-gray-200">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
-          Message
-        </h2>
-        <div className="prose prose-sm max-w-none text-gray-800">
-          <p>{bodyText}</p>
-        </div>
+      {/* Body */}
+      <div className="px-6 py-5">
+        {hasHtmlBody ? (
+          <HtmlBodyRenderer html={email.body_html!} />
+        ) : hasTextBody ? (
+          <div
+            className="text-gray-800 text-sm leading-relaxed max-w-none break-words"
+            style={{ whiteSpace: "pre-wrap" }}
+          >
+            {decodeHtmlEntities(email.body_text!)}
+          </div>
+        ) : (
+          <p className="text-gray-400 italic text-sm">(no body content)</p>
+        )}
       </div>
-    </div>
+    </article>
   );
 }
 

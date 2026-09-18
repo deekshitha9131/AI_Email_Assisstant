@@ -9,7 +9,7 @@ service or Gmail API are ever involved, consistent with UserCreate's
 existing use of EmailStr.
 """
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 class GmailSyncRequest(BaseModel):
@@ -60,6 +60,13 @@ class GmailSendRequest(BaseModel):
         description="If provided, Gmail sends this as a reply within the "
         "given thread. If omitted, Gmail starts a new conversation.",
     )
+
+    @field_validator("to", "cc", "bcc", mode="before")
+    @classmethod
+    def normalize_recipients(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        return [recipient.strip() if isinstance(recipient, str) else recipient for recipient in value]
 
     @model_validator(mode="after")
     def validate_at_least_one_body(self) -> "GmailSendRequest":

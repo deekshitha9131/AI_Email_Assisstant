@@ -17,7 +17,11 @@ from googleapiclient.errors import HttpError
 
 from app.core.config import Settings
 from app.domain.entities.oauth_token import OAuthToken
-from app.domain.exceptions.gmail import GmailAPIError, GmailAuthenticationError
+from app.domain.exceptions.gmail import (
+    GmailAPIError,
+    GmailAuthenticationError,
+    GmailHistoryExpiredError,
+)
 from app.infrastructure.gmail.client import GmailClient
 
 BASE_ENV = {
@@ -99,6 +103,21 @@ async def test_list_messages_passes_filters_through(
         pageToken="prev-token",
         maxResults=25,
     )
+
+
+@patch("app.infrastructure.gmail.client.build")
+async def test_list_history_translates_expired_cursor(
+    mock_build: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_service = MagicMock()
+    mock_service.users.return_value.history.return_value.list.return_value.execute.side_effect = (
+        _http_error(404)
+    )
+    mock_build.return_value = mock_service
+
+    client = _client(monkeypatch)
+    with pytest.raises(GmailHistoryExpiredError):
+        await client.list_history(start_history_id="stale-history")
 
 
 @patch("app.infrastructure.gmail.client.build")
@@ -200,6 +219,38 @@ async def test_get_profile_raises_gmail_authentication_error_on_403(
 
     client = _client(monkeypatch)
     with pytest.raises(GmailAuthenticationError):
+        await client.get_profile()
+
+
+@patch("app.infrastructure.gmail.client.build")
+async def test_get_profile_raises_api_error_on_rate_limit(
+    mock_build: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_service = MagicMock()
+    mock_service.users.return_value.getProfile.return_value.execute.side_effect = HttpError(
+        httplib2.Response({"status": "403"}),
+        b'{"error":{"errors":[{"reason":"rateLimitExceeded"}]}}',
+    )
+    mock_build.return_value = mock_service
+
+    client = _client(monkeypatch)
+    with pytest.raises(GmailAPIError, match="rate-limited"):
+        await client.get_profile()
+
+
+@patch("app.infrastructure.gmail.client.build")
+async def test_get_profile_raises_api_error_when_gmail_api_is_not_enabled(
+    mock_build: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_service = MagicMock()
+    mock_service.users.return_value.getProfile.return_value.execute.side_effect = HttpError(
+        httplib2.Response({"status": "403"}),
+        b'{"error":{"errors":[{"reason":"accessNotConfigured"}]}}',
+    )
+    mock_build.return_value = mock_service
+
+    client = _client(monkeypatch)
+    with pytest.raises(GmailAPIError, match="not enabled"):
         await client.get_profile()
 
 

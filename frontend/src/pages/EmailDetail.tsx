@@ -10,29 +10,78 @@ import type { AIUnderstandingResult, Draft } from "@/types";
 
 type DraftGenerationStatus = "idle" | "generating" | "success" | "not_analyzed" | "error";
 
+function describeAnalysisError(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case "AI_CONFIGURATION_ERROR":
+        return "AI is not configured. Set GROQ_API_KEY in backend/.env and restart the backend.";
+      case "AI_AUTHENTICATION_ERROR":
+        return "The AI provider rejected its API key. Check the backend configuration.";
+      case "AI_TIMEOUT":
+        return "The AI request timed out. Please try again.";
+      case "AI_PROVIDER_ERROR":
+        return error.message;
+      case "AI_INVALID_RESPONSE":
+        return error.message;
+      default:
+        return error.message || "AI analysis failed. Please try again.";
+    }
+  }
+  return "AI analysis failed due to an unexpected error. Please try again.";
+}
+
+function describeDraftError(error: unknown): string {
+  if (error instanceof ApiError) {
+    switch (error.code) {
+      case "DRAFT_UNDERSTANDING_MISSING":
+        return "Analyze the email with AI before generating a reply.";
+      case "AI_PROVIDER_ERROR":
+        return `Draft generation failed: ${error.message}`;
+      case "AI_CONFIGURATION_ERROR":
+        return "AI is not configured. Set GROQ_API_KEY in backend/.env and restart the backend.";
+      case "AI_TIMEOUT":
+        return "The AI request timed out while generating the reply. Please try again.";
+      case "DRAFT_STATUS_ERROR":
+        return error.message;
+      default:
+        return error.message || "Unable to generate a reply. Please try again.";
+    }
+  }
+  return "Unable to generate a reply due to an unexpected error. Please try again.";
+}
+
 function EmailDetail() {
   const { emailId } = useParams<{ emailId: string }>();
   const { status, email, retry } = useEmailDetail(emailId ?? "");
   const [draftStatus, setDraftStatus] = useState<DraftGenerationStatus>("idle");
+  const [draftError, setDraftError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [analysisStatus, setAnalysisStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [analysisResult, setAnalysisResult] = useState<AIUnderstandingResult | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
-  async function handleGenerateDraft() {
+  const handleGenerateDraft = useCallback(async () => {
     if (!email || draftStatus === "generating") return;
     setDraftStatus("generating");
+    setDraftError(null);
     try {
       const generated = await createDraft({ email_id: email.id });
       setDraft(generated);
       setDraftStatus("success");
     } catch (error) {
-      setDraftStatus(error instanceof ApiError && error.code === "DRAFT_UNDERSTANDING_MISSING" ? "not_analyzed" : "error");
+      if (error instanceof ApiError && error.code === "DRAFT_UNDERSTANDING_MISSING") {
+        setDraftStatus("not_analyzed");
+      } else {
+        setDraftStatus("error");
+      }
+      setDraftError(describeDraftError(error));
     }
-  }
+  }, [draftStatus, email]);
 
   const handleAnalyzeEmail = useCallback(async () => {
     if (!email || !emailId || analysisStatus === "loading") return;
     setAnalysisStatus("loading");
+    setAnalysisError(null);
     try {
       const result = await analyzeEmail(emailId);
       setAnalysisResult(result);
@@ -40,6 +89,7 @@ function EmailDetail() {
     } catch (error) {
       console.error("AI analysis failed:", error);
       setAnalysisStatus("error");
+      setAnalysisError(describeAnalysisError(error));
     }
   }, [analysisStatus, email, emailId]);
 
@@ -87,7 +137,11 @@ function EmailDetail() {
                   <p className="text-sm text-gray-600">Sentiment: {analysisResult.sentiment}</p>
                 </div>
               )}
-              {analysisStatus === "error" && <p className="text-red-700">Unable to analyze this email.</p>}
+              {analysisStatus === "error" && (
+                <div className="bg-red-50 border-l-4 border-red-400 p-4">
+                  <p className="text-red-700">{analysisError}</p>
+                </div>
+              )}
             </section>
 
             {!draft && (
@@ -100,8 +154,16 @@ function EmailDetail() {
                 {draftStatus === "generating" ? "Generating reply..." : "Generate Reply"}
               </button>
             )}
-            {draftStatus === "not_analyzed" && <p className="mt-3 text-gray-600">Analyze the email before generating a reply.</p>}
-            {draftStatus === "error" && <p className="mt-3 text-red-700">Unable to generate a reply.</p>}
+            {draftStatus === "not_analyzed" && (
+              <p className="mt-3 text-amber-700 bg-amber-50 border-l-4 border-amber-400 p-3">
+                {draftError || "Analyze the email before generating a reply."}
+              </p>
+            )}
+            {draftStatus === "error" && (
+              <div className="mt-3 bg-red-50 border-l-4 border-red-400 p-3">
+                <p className="text-red-700">{draftError || "Unable to generate a reply."}</p>
+              </div>
+            )}
             {draft && <div className="mt-6"><DraftEditor draft={draft} onDraftChange={setDraft} /></div>}
           </>
         )}

@@ -27,7 +27,8 @@ BASE_ENV = {
     "CELERY_RESULT_BACKEND": "redis://h:6379/1",
     "TOKEN_ENCRYPTION_KEY": "test-token-encryption-key-value",
     "CORS_ORIGINS": "http://localhost:5173",
-    "ANTHROPIC_API_KEY": "test-anthropic-key",
+    "LLM_PROVIDER": "groq",
+    "GROQ_API_KEY": "test-groq-key",
 }
 
 
@@ -136,12 +137,12 @@ async def test_generate_calls_provider_with_configured_drafting_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llm_provider = FakeLLMProvider()
-    settings = _settings(monkeypatch, LLM_DRAFTING_MODEL="claude-drafting-test-model")
+    settings = _settings(monkeypatch, LLM_DRAFTING_MODEL="groq-drafting-test-model")
     generator = DraftGenerator(llm_provider=llm_provider, settings=settings)
 
     await generator.generate(_draft_context())
 
-    assert llm_provider.generate_text_calls[0]["model"] == "claude-drafting-test-model"
+    assert llm_provider.generate_text_calls[0]["model"] == "groq-drafting-test-model"
 
 
 async def test_generate_returns_exact_provider_text_unmodified(monkeypatch: pytest.MonkeyPatch) -> None:

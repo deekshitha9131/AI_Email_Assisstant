@@ -16,7 +16,9 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@types/dompurify": "^3.0.5",
     "axios": "^1.7.4",
+    "dompurify": "^3.4.15",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.30.4",

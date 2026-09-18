@@ -12,6 +12,7 @@ from app.domain.exceptions.base import (
     BusinessValidationError,
     ConflictError,
     DomainError,
+    ForbiddenError,
     UnauthorizedError,
 )
 
@@ -23,6 +24,13 @@ class GmailAuthenticationError(UnauthorizedError):
 
     code = "GMAIL_AUTHENTICATION_FAILED"
     http_status = 401
+
+
+class GmailPermissionError(ForbiddenError):
+    """Raised when the token is valid but lacks the required Gmail scope."""
+
+    code = "GMAIL_PERMISSION_DENIED"
+    http_status = 403
 
 
 class GmailAPIError(DomainError):
@@ -67,3 +75,9 @@ class GmailSyncRequiredError(ConflictError):
     action (call /gmail/sync first)."""
 
     code = "GMAIL_INITIAL_SYNC_REQUIRED"
+
+
+class GmailHistoryExpiredError(ConflictError):
+    """Raised when Gmail no longer retains the stored incremental cursor."""
+
+    code = "GMAIL_HISTORY_EXPIRED"

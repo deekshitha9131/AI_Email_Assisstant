@@ -90,3 +90,7 @@ services:
       - "${FRONTEND_DEV_PORT:-5173}:5173"
     environment:
       NODE_ENV: development
+
+  nginx:
+    volumes:
+      - ./infra/docker/nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro

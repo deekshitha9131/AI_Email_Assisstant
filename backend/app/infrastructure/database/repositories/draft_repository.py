@@ -64,6 +64,16 @@ class DraftRepository:
         model = result.scalar_one_or_none()
         return _to_entity(model) if model is not None else None
 
+    async def get_by_email_id(self, email_id: UUID) -> Draft | None:
+        stmt = (
+            select(DraftModel)
+            .where(DraftModel.email_id == email_id)
+            .order_by(DraftModel.created_at.desc())
+        )
+        result = await self._session.execute(stmt)
+        model = result.scalars().first()
+        return _to_entity(model) if model is not None else None
+
     async def get_by_id_for_user(self, draft_id: UUID, user_id: UUID) -> Draft | None:
         stmt = (
             select(DraftModel)

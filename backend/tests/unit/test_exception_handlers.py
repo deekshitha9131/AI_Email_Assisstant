@@ -59,9 +59,10 @@ def test_unhandled_exception_returns_500_without_leaking_internals(
     async def _raise() -> None:
         raise RuntimeError("some internal detail that must never reach the client")
 
-    response = unit_client.get("/__test/boom")
+    response = unit_client.get("/__test/boom", headers={"Origin": "http://localhost:5173"})
 
     body = assert_error_envelope(response, status_code=500, code="INTERNAL_SERVER_ERROR")
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
     # The whole point of the generic handler: internal exception text
     # must never appear in the client-facing message.
     assert "internal detail" not in body["error"]["message"]

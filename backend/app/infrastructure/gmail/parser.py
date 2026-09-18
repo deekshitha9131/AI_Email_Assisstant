@@ -1,7 +1,9 @@
 import base64
 import binascii
+import html
 from datetime import UTC, datetime
 from email.utils import getaddresses
+from html.parser import HTMLParser
 from typing import Any
 
 from app.application.dto.gmail import ParsedAttachment, ParsedEmail
@@ -9,6 +11,37 @@ from app.domain.exceptions.gmail import GmailParseError
 
 _MIME_TEXT_PLAIN = "text/plain"
 _MIME_TEXT_HTML = "text/html"
+
+
+class _HTMLTextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.chunks: list[str] = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"script", "style"}:
+            self.skip_depth += 1
+        elif tag in {"br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"}:
+            self.chunks.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"script", "style"}:
+            self.skip_depth = max(0, self.skip_depth - 1)
+        elif tag in {"p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"}:
+            self.chunks.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self.skip_depth == 0:
+            self.chunks.append(data)
+
+
+def _html_to_text(html_content: str) -> str:
+    extractor = _HTMLTextExtractor()
+    extractor.feed(html_content)
+    extractor.close()
+    lines = [" ".join(line.split()) for line in "".join(extractor.chunks).splitlines()]
+    return "\n".join(line for line in lines if line).strip()
 
 
 def _decode_base64url(data: str) -> bytes:
@@ -133,6 +166,11 @@ class EmailParser:
             attachments=attachments,
         )
 
+        body_text = "\n".join(plain_text_chunks) if plain_text_chunks else None
+        body_html = "\n".join(html_chunks) if html_chunks else None
+        if body_text is None and body_html:
+            body_text = _html_to_text(body_html)
+
         return ParsedEmail(
             gmail_message_id=message_id,
             gmail_thread_id=thread_id,
@@ -141,10 +179,10 @@ class EmailParser:
             recipients=_parse_address_list(_get_header(headers, "To")),
             cc=_parse_address_list(_get_header(headers, "Cc")),
             bcc=_parse_address_list(_get_header(headers, "Bcc")),
-            snippet=raw_message.get("snippet", ""),
+            snippet=html.unescape(raw_message.get("snippet", "")),
             internal_date=_parse_internal_date(raw_message),
             label_ids=list(raw_message.get("labelIds", [])),
-            body_text="\n".join(plain_text_chunks) if plain_text_chunks else None,
-            body_html="\n".join(html_chunks) if html_chunks else None,
+            body_text=body_text,
+            body_html=body_html,
             attachments=attachments,
         )

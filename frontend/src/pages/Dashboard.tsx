@@ -1,12 +1,14 @@
-﻿import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { useCallback, useEffect, useState } from "react";
 
 import { useAuth } from "@/hooks/useAuth";
 import { getServiceStatus } from "@/api";
+import { loginUrl } from "@/api/auth";
+import type { AIStatus } from "@/api/status";
 
 type DashboardStatus = {
   gmail: "checking" | "connected" | "disconnected" | "expired" | "error";
-  ai: "checking" | "available" | "unavailable" | "error";
+  ai: "checking" | AIStatus | "error";
   draft: "checking" | "ready" | "not-ready" | "error";
   loading: boolean;
   error: string | null;
@@ -91,7 +93,7 @@ function Dashboard() {
                 {!status.loading && (status.gmail === "disconnected" || status.gmail === "expired") && (
                   <button
                     type="button"
-                    onClick={() => navigate("/auth/google/login")}
+                    onClick={() => { window.location.href = loginUrl; }}
                     className="mt-2 px-3 py-1 bg-blue-50 hover:bg-blue-100 text-blue-800 font-sm rounded-md"
                   >
                     {status.gmail === "disconnected" ? "Connect Gmail" : "Reconnect Gmail"}
@@ -105,8 +107,10 @@ function Dashboard() {
                 </div>
                 <span className="text-sm text-gray-600">
                   {status.loading && status.ai === "checking" ? "Checking..." : 
-                   status.ai === "available" ? "AI Service Available" :
-                   status.ai === "unavailable" ? "AI Service Unavailable" :
+                   status.ai === "available" ? "AI Available" :
+                   status.ai === "not_configured" ? "AI Not Configured" :
+                   status.ai === "authentication_error" ? "AI Authentication Error" :
+                   status.ai === "timeout" ? "AI Temporarily Unavailable" :
                    "AI Service Error"}
                 </span>
               </div>
@@ -147,6 +151,16 @@ function Dashboard() {
                 <span>Compose Email</span>
                 <svg className="w-4 h-4 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+              </button>
+              <button
+                onClick={() => navigate("/drafts")}
+                type="button"
+                className="w-full flex items-center justify-between px-4 py-3 bg-yellow-50 hover:bg-yellow-100 text-yellow-800 font-medium rounded-lg transition-colors"
+              >
+                <span>Open Drafts</span>
+                <svg className="w-4 h-4 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
                 </svg>
               </button>
             </div>

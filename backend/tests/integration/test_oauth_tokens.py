@@ -92,6 +92,35 @@ async def test_save_oauth_tokens_overwrites_previous_tokens(repo: UserRepository
     assert tokens.refresh_token == "second-refresh-token"
 
 
+async def test_save_oauth_tokens_preserves_refresh_token_when_omitted(
+    repo: UserRepository,
+) -> None:
+    user = await repo.create(
+        email="preserve@example.com", full_name="Preserve User", google_sub_id="sub-preserve"
+    )
+    expiry = datetime.now(UTC) + timedelta(hours=1)
+
+    await repo.save_oauth_tokens(
+        user.id,
+        access_token="first-access-token",
+        refresh_token="stable-refresh-token",
+        token_expiry=expiry,
+        granted_scopes=["openid"],
+    )
+    await repo.save_oauth_tokens(
+        user.id,
+        access_token="second-access-token",
+        refresh_token=None,
+        token_expiry=expiry,
+        granted_scopes=["openid", "email"],
+    )
+
+    tokens = await repo.get_oauth_tokens(user.id)
+    assert tokens is not None
+    assert tokens.access_token == "second-access-token"
+    assert tokens.refresh_token == "stable-refresh-token"
+
+
 async def test_tokens_are_actually_encrypted_in_the_database(
     repo: UserRepository, prepared_db: AsyncEngine
 ) -> None:

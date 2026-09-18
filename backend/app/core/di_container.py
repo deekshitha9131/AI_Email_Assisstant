@@ -6,14 +6,19 @@ import redis.asyncio as redis
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.context.draft_context import DraftContextBuilder
 from app.ai.preprocessing.email_preprocessor import EmailPreprocessor
 from app.ai.providers.llm_provider import LLMProvider
 from app.ai.rag.chunker import EmailChunker
+from app.ai.rag.context_builder import ContextBuilder as RAGContextBuilder
 from app.ai.rag.embedding import EmbeddingService
 from app.ai.rag.indexing_service import EmailIndexingService
 from app.ai.rag.retrieval import RetrievalService
+from app.ai.services.draft_generator import DraftGenerator
 from app.ai.services.understanding_service import AIUnderstandingService
 from app.application.services.auth_service import AuthService
+from app.application.services.compose_draft_service import ComposeDraftService
+from app.application.services.draft_service import DraftService
 from app.application.services.email_service import EmailService
 from app.application.services.gmail_service import GmailService
 from app.application.services.thread_service import ThreadService
@@ -23,25 +28,17 @@ from app.core.security import TokenCipher
 from app.domain.entities.user import User
 from app.domain.exceptions.auth import SessionNotFoundError
 from app.infrastructure.cache.session_store import SessionStore
+from app.infrastructure.database.repositories.compose_draft_repository import ComposeDraftRepository
+from app.infrastructure.database.repositories.draft_repository import DraftRepository
 from app.infrastructure.database.repositories.email_ai_understanding_repository import (
     EmailAIUnderstandingRepository,
 )
-
-from app.ai.rag.context_builder import ContextBuilder as RAGContextBuilder
-from app.ai.context.draft_context import DraftContextBuilder
-from app.application.services.draft_service import DraftService
-from app.infrastructure.database.repositories.email_ai_understanding_repository import (
-    EmailAIUnderstandingRepository,
-)
-
-from app.ai.services.draft_generator import DraftGenerator
 from app.infrastructure.database.repositories.email_chunk_repository import EmailChunkRepository
 from app.infrastructure.database.repositories.email_repository import EmailRepository
 from app.infrastructure.database.repositories.thread_repository import ThreadRepository
 from app.infrastructure.database.repositories.user_repository import UserRepository
 from app.infrastructure.database.session import get_db_session
 from app.infrastructure.gmail.oauth_client import GoogleOAuthClient
-from app.infrastructure.database.repositories.draft_repository import DraftRepository
 
 
 def get_redis(request: Request) -> redis.Redis:
@@ -75,6 +72,12 @@ def get_draft_repository(
     db: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> DraftRepository:
     return DraftRepository(db)
+
+
+def get_compose_draft_repository(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ComposeDraftRepository:
+    return ComposeDraftRepository(db)
 
 def get_oauth_client(
     settings: Annotated[Settings, Depends(get_settings_dependency)],
@@ -142,21 +145,6 @@ def get_email_repository(
     return EmailRepository(db)
 
 
-def get_gmail_service(
-    user_repository: Annotated[UserRepository, Depends(get_user_repository)],
-    thread_repository: Annotated[ThreadRepository, Depends(get_thread_repository)],
-    email_repository: Annotated[EmailRepository, Depends(get_email_repository)],
-    settings: Annotated[Settings, Depends(get_settings_dependency)],
-) -> GmailService:
-
-    return GmailService(
-        user_repository=user_repository,
-        thread_repository=thread_repository,
-        email_repository=email_repository,
-        settings=settings,
-    )
-
-
 def get_email_service(
     email_repository: Annotated[EmailRepository, Depends(get_email_repository)],
 ) -> EmailService:
@@ -196,10 +184,8 @@ def get_email_chunker() -> EmailChunker:
     return EmailChunker()
 
 
-def get_embedding_service(
-    settings: Annotated[Settings, Depends(get_settings_dependency)],
-) -> EmbeddingService:
-    return EmbeddingService(settings)
+def get_embedding_service() -> EmbeddingService:
+    return EmbeddingService()
 
 
 def get_email_chunk_repository(
@@ -222,6 +208,22 @@ def get_email_indexing_service(
     )
 
 
+def get_gmail_service(
+    user_repository: Annotated[UserRepository, Depends(get_user_repository)],
+    thread_repository: Annotated[ThreadRepository, Depends(get_thread_repository)],
+    email_repository: Annotated[EmailRepository, Depends(get_email_repository)],
+    indexing_service: Annotated[EmailIndexingService, Depends(get_email_indexing_service)],
+    settings: Annotated[Settings, Depends(get_settings_dependency)],
+) -> GmailService:
+    return GmailService(
+        user_repository=user_repository,
+        thread_repository=thread_repository,
+        email_repository=email_repository,
+        indexing_service=indexing_service,
+        settings=settings,
+    )
+
+
 def get_retrieval_service(
     embedding_service: Annotated[EmbeddingService, Depends(get_embedding_service)],
     chunk_repository: Annotated[EmailChunkRepository, Depends(get_email_chunk_repository)],
@@ -233,11 +235,6 @@ def get_draft_generator(
     settings: Annotated[Settings, Depends(get_settings_dependency)],
 ) -> DraftGenerator:
     return DraftGenerator(llm_provider=llm_provider, settings=settings)
-
-def get_email_ai_understanding_repository(
-    db: Annotated[AsyncSession, Depends(get_db_session)],
-) -> EmailAIUnderstandingRepository:
-    return EmailAIUnderstandingRepository(db)
 
 def get_rag_context_builder() -> RAGContextBuilder:
     return RAGContextBuilder()
@@ -265,3 +262,9 @@ def get_draft_service(
         draft_generator=draft_generator,
         draft_repository=draft_repository,
     )
+
+
+def get_compose_draft_service(
+    repository: Annotated[ComposeDraftRepository, Depends(get_compose_draft_repository)],
+) -> ComposeDraftService:
+    return ComposeDraftService(repository=repository)

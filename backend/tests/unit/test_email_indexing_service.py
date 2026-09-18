@@ -61,7 +61,7 @@ class FakeEmbeddingService:
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         self.embed_texts_calls.append(texts)
-        return [[0.1, 0.2, 0.3] for _ in texts]
+        return [[0.1] * 384 for _ in texts]
 
 
 class FakeChunkRepository:

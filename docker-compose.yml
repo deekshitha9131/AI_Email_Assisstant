@@ -82,11 +82,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.core.celery_app inspect ping -d sync@$$HOSTNAME || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
+      disable: true
 
   # worker-classification:
   #   build:
@@ -184,11 +180,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "celery -A app.core.celery_app inspect ping -d notifications@$$HOSTNAME || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
+      disable: true
 
   celery-beat:
     build:
@@ -207,6 +199,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      disable: true
 
   frontend:
     build:
@@ -236,7 +230,7 @@ services:
       - api
       - frontend
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:80/"]
       interval: 15s
       timeout: 5s
       retries: 3

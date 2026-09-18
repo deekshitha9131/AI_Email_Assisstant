@@ -80,6 +80,12 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if not settings.is_production else None,
         lifespan=lifespan,
     )
+    app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(RequestLoggingMiddleware)
+    # CORSMiddleware must be added LAST so that Starlette's insert-at-0
+    # ordering places it as the outermost user middleware.  This guarantees
+    # every response — including error responses produced by inner middleware
+    # or exception handlers — carries the Access-Control-Allow-Origin header.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -87,8 +93,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.add_middleware(RequestLoggingMiddleware)
-    app.add_middleware(RequestIDMiddleware)
     app.add_exception_handler(DomainError, domain_error_handler)  # type: ignore[arg-type]
     app.add_exception_handler(RequestValidationError, validation_error_handler)  # type: ignore[arg-type]
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]

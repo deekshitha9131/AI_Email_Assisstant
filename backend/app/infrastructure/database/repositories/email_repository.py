@@ -164,6 +164,37 @@ class EmailRepository:
         result = await self._session.execute(stmt)
         return [_to_entity(model) for model in result.scalars().all()]
 
+    async def get_by_user_id_for_list(
+        self,
+        user_id: UUID,
+        *,
+        page: int = 1,
+        page_size: int = 25,
+        sort: SortOrder = "newest",
+        is_read: bool | None = None,
+        is_starred: bool | None = None,
+        has_attachments: bool | None = None,
+    ) -> list[Email]:
+        if page < 1:
+            raise ValueError(f"page must be >= 1, got {page}")
+        if page_size < 1:
+            raise ValueError(f"page_size must be >= 1, got {page_size}")
+
+        stmt = _apply_filters(
+            select(EmailModel),
+            user_id=user_id,
+            is_read=is_read,
+            is_starred=is_starred,
+            has_attachments=has_attachments,
+        )
+        order_column = (
+            EmailModel.received_at.desc() if sort == "newest" else EmailModel.received_at.asc()
+        )
+        stmt = stmt.order_by(order_column).limit(page_size).offset((page - 1) * page_size)
+
+        result = await self._session.execute(stmt)
+        return [_to_entity(model) for model in result.scalars().all()]
+
     async def count_by_user_id(
         self,
         user_id: UUID,

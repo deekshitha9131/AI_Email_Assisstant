@@ -5,10 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import TokenCipher
+from app.core.security import TokenCipher, TokenCipherError
 from app.domain.entities.oauth_token import OAuthToken
 from app.domain.entities.user import User
 from app.domain.enums.user_status import UserStatus
+from app.domain.exceptions.gmail import GmailAuthenticationError
 from app.domain.exceptions.user import UserAlreadyExistsError, UserNotFoundError
 from app.infrastructure.database.models.oauth_token import OAuthTokenModel
 from app.infrastructure.database.models.user import UserModel
@@ -108,7 +109,7 @@ class UserRepository:
         user_id: UUID,
         *,
         access_token: str,
-        refresh_token: str,
+        refresh_token: str | None,
         token_expiry: datetime,
         granted_scopes: list[str],
     ) -> None:
@@ -118,9 +119,16 @@ class UserRepository:
         model = result.scalar_one_or_none()
 
         access_encrypted = self._token_cipher.encrypt(access_token)
-        refresh_encrypted = self._token_cipher.encrypt(refresh_token)
+        refresh_encrypted = (
+            self._token_cipher.encrypt(refresh_token) if refresh_token else None
+        )
 
         if model is None:
+            if refresh_encrypted is None:
+                raise GmailAuthenticationError(
+                    "Google did not provide a refresh token for this Gmail connection. "
+                    "Reconnect Gmail with offline access."
+                )
             model = OAuthTokenModel(
                 user_id=user_id,
                 access_token_encrypted=access_encrypted,
@@ -131,7 +139,8 @@ class UserRepository:
             self._session.add(model)
         else:
             model.access_token_encrypted = access_encrypted
-            model.refresh_token_encrypted = refresh_encrypted
+            if refresh_encrypted is not None:
+                model.refresh_token_encrypted = refresh_encrypted
             model.token_expiry = token_expiry
             model.granted_scopes = granted_scopes
 
@@ -144,10 +153,19 @@ class UserRepository:
         if model is None:
             return None
 
+        try:
+            access_token = self._token_cipher.decrypt(model.access_token_encrypted)
+            refresh_token = self._token_cipher.decrypt(model.refresh_token_encrypted)
+        except TokenCipherError as exc:
+            raise GmailAuthenticationError(
+                "Stored Gmail credentials cannot be decrypted. Reconnect Gmail to issue "
+                "new credentials."
+            ) from exc
+
         return OAuthToken(
             user_id=model.user_id,
-            access_token=self._token_cipher.decrypt(model.access_token_encrypted),
-            refresh_token=self._token_cipher.decrypt(model.refresh_token_encrypted),
+            access_token=access_token,
+            refresh_token=refresh_token,
             token_expiry=model.token_expiry,
             granted_scopes=list(model.granted_scopes),
         )

@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 from collections.abc import Callable
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -7,6 +8,7 @@ from typing import Any, TypeVar, cast
 
 import structlog
 from google.auth.exceptions import GoogleAuthError
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import Resource, build
 from googleapiclient.errors import HttpError
@@ -14,7 +16,12 @@ from googleapiclient.errors import HttpError
 from app.core.config import Settings
 from app.core.constants import GOOGLE_TOKEN_ENDPOINT
 from app.domain.entities.oauth_token import OAuthToken
-from app.domain.exceptions.gmail import GmailAPIError, GmailAuthenticationError
+from app.domain.exceptions.gmail import (
+    GmailAPIError,
+    GmailAuthenticationError,
+    GmailHistoryExpiredError,
+    GmailPermissionError,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -25,6 +32,22 @@ _GMAIL_SERVICE_VERSION = "v1"
 _DEFAULT_MAX_RESULTS = 100
 
 _AUTH_FAILURE_STATUSES = frozenset({401, 403})
+
+
+def _google_error_reasons(error: HttpError) -> set[str]:
+    try:
+        body = json.loads(error.content.decode("utf-8"))
+    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
+        return set()
+    error_body = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error_body, dict):
+        return set()
+    return {
+        str(item.get("reason"))
+        for item in error_body.get("errors", [])
+        if isinstance(item, dict)
+        if item.get("reason")
+    }
 
 
 class GmailClient:
@@ -61,9 +84,42 @@ class GmailClient:
                     "Failed to build an authenticated Gmail API client from "
                     "the stored OAuth tokens."
                 ) from exc
+            except Exception as exc:
+                raise GmailAPIError(
+                    "Failed to initialize the Gmail API client. "
+                    "The Gmail API service may be unavailable."
+                ) from exc
         return self._service
 
-    async def _execute(self, operation: Callable[[Resource], T]) -> T:
+    async def refresh_access_token(self) -> OAuthToken:
+        """Refresh an expired access token and return the updated token set."""
+        credentials = self._build_credentials()
+        try:
+            await asyncio.to_thread(credentials.refresh, Request())
+        except GoogleAuthError as exc:
+            logger.warning(
+                "gmail_access_token_refresh_failed",
+                error_type=type(exc).__name__,
+            )
+            raise GmailAuthenticationError(
+                "Gmail could not refresh the stored access token. "
+                "The Gmail permission may have been revoked."
+            ) from exc
+
+        if not credentials.token or not credentials.expiry:
+            raise GmailAuthenticationError("Google returned an incomplete refreshed token.")
+
+        return OAuthToken(
+            user_id=self._oauth_token.user_id,
+            access_token=credentials.token,
+            refresh_token=credentials.refresh_token or self._oauth_token.refresh_token,
+            token_expiry=credentials.expiry,
+            granted_scopes=self._oauth_token.granted_scopes,
+        )
+
+    async def _execute(
+        self, operation: Callable[[Resource], T], *, history_request: bool = False
+    ) -> T:
         """Run a synchronous googleapiclient call off the event loop and
         translate its errors into this project's domain exceptions."""
         service = self._get_service()
@@ -71,16 +127,45 @@ class GmailClient:
             return await asyncio.to_thread(operation, service)
         except HttpError as exc:
             status = exc.resp.status if exc.resp is not None else None
+            reasons = _google_error_reasons(exc)
+            if "accessNotConfigured" in reasons:
+                raise GmailAPIError(
+                    "The Gmail API is not enabled for the configured Google Cloud project."
+                ) from exc
+            if reasons & {"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded"}:
+                raise GmailAPIError(
+                    "Gmail temporarily rate-limited this request. Please retry the sync."
+                ) from exc
+            if "insufficientPermissions" in reasons or "forbidden" in reasons:
+                raise GmailPermissionError(
+                    "The connected Google account does not grant the required Gmail scope. "
+                    "Reconnect Gmail and approve Gmail access."
+                ) from exc
             if status in _AUTH_FAILURE_STATUSES:
+                logger.warning(
+                    "gmail_request_authentication_failed",
+                    status=status,
+                    reasons=sorted(reasons),
+                )
                 raise GmailAuthenticationError(
                     "Gmail rejected the request as unauthenticated or "
                     "unauthorized — the stored OAuth tokens may be expired "
                     "or revoked."
                 ) from exc
+            if history_request and status == 404:
+                raise GmailHistoryExpiredError(
+                    "Gmail no longer retains the history needed for incremental sync."
+                ) from exc
             raise GmailAPIError(f"Gmail API request failed with status {status}.") from exc
         except GoogleAuthError as exc:
             raise GmailAuthenticationError(
                 "Failed to authenticate with Gmail using the stored OAuth tokens."
+            ) from exc
+        except (GmailAPIError, GmailAuthenticationError, GmailHistoryExpiredError):
+            raise
+        except Exception as exc:
+            raise GmailAPIError(
+                "An unexpected error occurred while communicating with the Gmail API."
             ) from exc
 
     async def get_profile(self) -> dict[str, Any]:
@@ -141,7 +226,7 @@ class GmailClient:
             )
             return cast(dict[str, Any], request.execute())
 
-        return await self._execute(_call)
+        return await self._execute(_call, history_request=True)
 
     async def send_message(
         self, *, raw_message: str, thread_id: str | None = None

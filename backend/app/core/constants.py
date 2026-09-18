@@ -57,7 +57,8 @@ MAX_PAGE_SIZE: Final[int] = 100
 
 GMAIL_LIST_PAGE_SIZE: Final[int] = 100
 MAX_MESSAGES_PER_SYNC: Final[int] = 1000
-EMBEDDING_DIMENSIONS: Final[int] = 1536
+EMBEDDING_DIMENSIONS: Final[int] = 384
+EMBEDDING_MODEL_NAME: Final[str] = "all-MiniLM-L6-v2"
 
 # --- AI preprocessing ---
 AI_PREPROCESSING_MAX_BODY_CHARACTERS: Final[int] = 8000

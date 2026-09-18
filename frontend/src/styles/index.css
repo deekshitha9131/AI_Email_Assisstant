@@ -51,3 +51,35 @@ body {
 .section-description {
   @apply text-gray-600 mb-4;
 }
+
+.email-html-body :where(p, ul, ol, blockquote, pre) {
+  @apply my-4;
+}
+
+.email-html-body :where(ul, ol) {
+  @apply pl-6;
+}
+
+.email-html-body ul {
+  @apply list-disc;
+}
+
+.email-html-body ol {
+  @apply list-decimal;
+}
+
+.email-html-body blockquote {
+  @apply border-l-2 border-gray-300 pl-4 text-gray-600;
+}
+
+.email-html-body a {
+  @apply text-blue-700 underline underline-offset-2;
+}
+
+.email-html-body img {
+  @apply max-w-full h-auto;
+}
+
+.email-html-body pre {
+  @apply overflow-x-auto whitespace-pre-wrap rounded bg-gray-50 p-3;
+}

@@ -44,7 +44,7 @@ class EmailService:
     ) -> tuple[list[Email], int]:
         """Return (page of emails, total matching the same filters) for
         the authenticated user's inbox."""
-        items = await self._email_repository.get_by_user_id(
+        items = await self._email_repository.get_by_user_id_for_list(
             user.id,
             page=page,
             page_size=page_size,
@@ -79,16 +79,11 @@ class EmailService:
     ) -> tuple[list[Email], int]:
         """Search the authenticated user's locally stored emails by text.
 
-        Raises InvalidSearchQueryError if `query` is empty or
-        whitespace-only — the one piece of business validation this
-        endpoint needs beyond what the repository's own SQL already
-        enforces (user_id scoping happens at the query level in both
-        `search_by_user_id` and `count_search_by_user_id`, never in
-        Python).
+        Empty or whitespace-only queries are handled by the repository
+        and will return the normal inbox list (all emails for the user).
+        User_id scoping happens at the query level in the repository.
         """
         normalized_query = query.strip()
-        if not normalized_query:
-            raise InvalidSearchQueryError("Search query must not be empty.")
 
         items = await self._email_repository.search_by_user_id(
             user.id, query=normalized_query, page=page, page_size=page_size

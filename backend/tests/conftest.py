@@ -34,8 +34,9 @@ def unit_client(app_no_lifespan: FastAPI) -> Generator[TestClient, None, None]:
 async def _postgres_reachable(settings: Settings) -> bool:
     engine = create_db_engine(settings)
     try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
+        async with asyncio.timeout(5):
+            async with engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
         return True
     except Exception:  # noqa: BLE001 — reachability probe, any failure means "not reachable"
         return False
@@ -46,7 +47,8 @@ async def _postgres_reachable(settings: Settings) -> bool:
 async def _redis_reachable(settings: Settings) -> bool:
     client = redis.from_url(settings.redis_url, socket_connect_timeout=2)
     try:
-        return bool(await client.ping())
+        async with asyncio.timeout(5):
+            return bool(await client.ping())
     except Exception:  # noqa: BLE001
         return False
     finally:

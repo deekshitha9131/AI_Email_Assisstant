@@ -102,6 +102,7 @@ class EmailChunkRepository:
                 distance.label("distance"),
             )
             .where(EmailChunkModel.user_id == user_id)
+            .where(EmailChunkModel.embedding.isnot(None))
             .order_by(distance.asc())
             .limit(top_k)
         )

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { listEmails, type ListEmailsParams } from "@/api/emails";
+import { listEmails, searchEmails, type ListEmailsParams, type SearchEmailsParams } from "@/api/emails";
 import type { EmailSummary } from "@/types";
 
 type Status = "loading" | "success" | "error";
@@ -15,11 +15,16 @@ interface UseEmailsResult {
   errorMessage: string | null;
   setPage: (page: number) => void;
   retry: () => void;
+  refresh: () => void;
 }
 
 const PAGE_SIZE = 25;
 
-export function useEmails(params: Omit<ListEmailsParams, "page" | "page_size"> = {}): UseEmailsResult {
+interface UseEmailsParams extends Omit<ListEmailsParams, "page" | "page_size"> {
+  search?: string;
+}
+
+export function useEmails(params: UseEmailsParams = {}): UseEmailsResult {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState<Status>("loading");
   const [emails, setEmails] = useState<EmailSummary[]>([]);
@@ -31,16 +36,47 @@ export function useEmails(params: Omit<ListEmailsParams, "page" | "page_size"> =
     setStatus("loading");
     setErrorMessage(null);
     try {
-      const result = await listEmails({ ...params, page, page_size: PAGE_SIZE });
+      let result;
+      // If search term is provided and not empty/whitespace, use search endpoint
+      if (params.search && params.search.trim()) {
+        const searchParams: SearchEmailsParams = {
+          q: params.search,
+          page,
+          page_size: PAGE_SIZE,
+        };
+        result = await searchEmails(searchParams);
+      } else {
+        // Otherwise use regular list endpoint (also handles empty search)
+        const listParams = { ...params };
+        // Remove search param if it exists since listEmails doesn't accept it
+        delete (listParams as any).search;
+        result = await listEmails({ ...listParams, page, page_size: PAGE_SIZE });
+      }
       setEmails(result.items);
       setTotal(result.total);
       setStatus("success");
-    } catch {
+    } catch (error) {
+      // If search fails with validation error (empty query), fall back to regular list
+      if (params.search && !params.search.trim()) {
+        try {
+          const listParams = { ...params };
+          delete (listParams as any).search;
+          const result = await listEmails({ ...listParams, page, page_size: PAGE_SIZE });
+          setEmails(result.items);
+          setTotal(result.total);
+          setStatus("success");
+          return;
+        } catch (fallbackError) {
+          setErrorMessage("We couldn't load your inbox. Please try again.");
+          setStatus("error");
+          return;
+        }
+      }
       setErrorMessage("We couldn't load your inbox. Please try again.");
       setStatus("error");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, reloadToken]);
+  }, [page, params.search, reloadToken]);
 
   useEffect(() => {
     void fetchEmails();
@@ -58,5 +94,6 @@ export function useEmails(params: Omit<ListEmailsParams, "page" | "page_size"> =
     errorMessage,
     setPage,
     retry,
+    refresh: retry,
   };
 }

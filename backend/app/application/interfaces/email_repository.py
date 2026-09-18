@@ -18,6 +18,7 @@ class IEmailRepository(Protocol):
     ) -> Email | None: ...
 
     async def get_by_gmail_thread_id(self, user_id: UUID, gmail_thread_id: str) -> list[Email]:
+        ...
 
     async def get_by_user_id(
         self,

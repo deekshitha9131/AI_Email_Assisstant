@@ -14,8 +14,8 @@ _SENTIMENT_VALUES = ", ".join(sentiment.value for sentiment in EmailSentiment)
 SYSTEM_PROMPT = (
     "You are an email understanding assistant. Given an email's sender, "
     "recipients, subject, and body, classify it and extract structured "
-    "information by calling the provided tool exactly once. Do not "
-    "respond in plain text.\n\n"
+    "information as one JSON object. Do not respond with markdown or "
+    "any text outside the JSON object.\n\n"
     f"category: exactly one of {_CATEGORY_VALUES}\n"
     f"intent: exactly one of {_INTENT_VALUES}\n"
     f"urgency: exactly one of {_URGENCY_VALUES}\n"

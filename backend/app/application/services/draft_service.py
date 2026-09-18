@@ -85,6 +85,9 @@ class DraftService:
 
         generated_text = await self._draft_generator.generate(draft_context)
 
+        existing_draft = await self._draft_repository.get_by_email_id(email.id)
+        if existing_draft is not None:
+            return await self._draft_repository.update_body(existing_draft.id, generated_text)
         return await self._draft_repository.create(email_id=email.id, body=generated_text)
 
     async def get_draft(self, user: User, draft_id: UUID) -> Draft:

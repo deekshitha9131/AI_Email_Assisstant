@@ -172,6 +172,7 @@ class FakeDraftRepository:
         self.update_status_calls: list[tuple] = []
         self.get_by_id_for_user_calls: list[tuple] = []
         self.get_by_id_calls: list = []
+        self.get_by_email_id_calls: list[UUID] = []
 
     async def create(self, *, email_id, body, status=DraftStatus.GENERATED):
         self.create_calls.append({"email_id": email_id, "body": body, "status": status})
@@ -180,6 +181,12 @@ class FakeDraftRepository:
     async def update_body(self, draft_id, body):
         self.update_body_calls.append((draft_id, body))
         return self._draft or _draft(body=body)
+
+    async def get_by_email_id(self, email_id: UUID) -> Draft | None:
+        self.get_by_email_id_calls.append(email_id)
+        if self._draft and self._draft.email_id == email_id:
+            return self._draft
+        return None
 
     async def update_status(self, draft_id, status):
         self.update_status_calls.append((draft_id, status))
@@ -401,6 +408,9 @@ async def test_draft_repository_failure_propagates() -> None:
     user = _user()
 
     class FailingDraftRepository:
+        async def get_by_email_id(self, email_id):
+            return None
+
         async def create(self, *, email_id, body, status=DraftStatus.GENERATED):
             raise RuntimeError("database write failed")
 

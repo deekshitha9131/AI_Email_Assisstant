@@ -27,4 +27,4 @@ class EmailChunkModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    embedding: Mapped[list[float]] = embedding_column(nullable=False)  # type: ignore[assignment]
+    embedding: Mapped[list[float] | None] = embedding_column(nullable=True)  # type: ignore[assignment]

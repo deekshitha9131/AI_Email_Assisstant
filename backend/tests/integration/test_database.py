@@ -85,7 +85,7 @@ async def test_pgvector_extension_is_available(db_engine):
 async def test_create_and_read_vector_record(session_factory):
     """Verify that a pgvector column can store and retrieve an embedding."""
 
-    embedding = [0.1] * 1536
+    embedding = [0.1] * 384
 
     async with session_factory() as session:
         record = _IntegrationCheckModel(
@@ -107,7 +107,7 @@ async def test_create_and_read_vector_record(session_factory):
         assert stored is not None
         assert stored.name == "integration-test"
         assert stored.embedding is not None
-        assert len(stored.embedding) == 1536
+        assert len(stored.embedding) == 384
 
 
 @pytest.mark.asyncio

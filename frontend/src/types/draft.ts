@@ -17,3 +17,31 @@ export interface DraftCreateRequest {
 export interface DraftUpdateRequest {
   body: string;
 }
+
+export interface ComposeDraft {
+  id: string;
+  user_id: string;
+  recipients: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  body_text: string | null;
+  body_html: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ComposeDraftPayload {
+  recipients: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject: string;
+  body_text?: string | null;
+  body_html?: string | null;
+}
+
+export interface ComposeDraftListResponse {
+  items: ComposeDraft[];
+  page: number;
+  page_size: number;
+}

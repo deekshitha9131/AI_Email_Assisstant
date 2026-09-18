@@ -5,18 +5,20 @@ export interface GmailSyncRequest {
 }
 
 export interface GmailSyncResponse {
-  // Based on the backend schema
-  messages_processed: number;
-  messages_saved: number;
-  threads_saved: number;
-  next_page_token?: string;
+  success: boolean;
+  threads_synced: number;
+  emails_synced: number;
+  attachments_found: number;
+  emails_skipped: number;
+  next_page_token?: string | null;
 }
 
 export interface GmailIncrementalSyncResponse {
-  // Based on the backend schema
-  messages_processed: number;
-  messages_saved: number;
-  threads_saved: number;
+  success: boolean;
+  emails_synced: number;
+  threads_updated: number;
+  attachments_found: number;
+  emails_skipped: number;
   history_id: string;
 }
 
@@ -31,17 +33,15 @@ export interface GmailSendRequest {
 }
 
 export interface GmailSendResponse {
-  message_id: string;
-  thread_id: string;
-  labels: string[];
+  success: boolean;
+  gmail_message_id: string;
+  gmail_thread_id: string;
 }
 
 export async function gmailSync(
   params: GmailSyncRequest = {}
 ): Promise<GmailSyncResponse> {
-  const response = await apiClient.post<GmailSyncResponse>("/gmail/sync", {
-    params
-  });
+  const response = await apiClient.post<GmailSyncResponse>("/gmail/sync", params);
   return response.data;
 }
 
@@ -53,8 +53,6 @@ export async function gmailIncrementalSync(): Promise<GmailIncrementalSyncRespon
 export async function gmailSend(
   data: GmailSendRequest
 ): Promise<GmailSendResponse> {
-  const response = await apiClient.post<GmailSendResponse>("/gmail/send", {
-    data
-  });
+  const response = await apiClient.post<GmailSendResponse>("/gmail/send", data);
   return response.data;
 }

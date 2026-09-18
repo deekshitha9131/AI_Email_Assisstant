@@ -7,6 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _ACTIVE_ENV = os.getenv("APP_ENV", "development")
 
 
+# Use the shared file as the base and environment-specific values as local
+# overrides. Compose injects backend/.env through the process environment, so
+# those values still take precedence inside containers.
 _ENV_FILES = (".env", f".env.{_ACTIVE_ENV}")
 
 
@@ -63,21 +66,17 @@ class Settings(BaseSettings):
     token_encryption_key: str = Field(alias="TOKEN_ENCRYPTION_KEY")
 
     # --- LLM provider ---
-    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    llm_provider: str = Field(default="groq", alias="LLM_PROVIDER")
+    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
     llm_classification_model: str = Field(
-        default="claude-haiku-4-5-20251001", alias="LLM_CLASSIFICATION_MODEL"
+        default="openai/gpt-oss-20b", alias="LLM_CLASSIFICATION_MODEL"
     )
-    llm_drafting_model: str = Field(default="claude-sonnet-5", alias="LLM_DRAFTING_MODEL")
-    llm_critique_model: str = Field(default="claude-sonnet-5", alias="LLM_CRITIQUE_MODEL")
+    llm_drafting_model: str = Field(default="openai/gpt-oss-20b", alias="LLM_DRAFTING_MODEL")
+    llm_critique_model: str = Field(default="openai/gpt-oss-20b", alias="LLM_CRITIQUE_MODEL")
 
     # --- Embeddings ---
-    # Separate from anthropic_api_key: Anthropic has no first-party
-    # embeddings API, and embedding_model's existing default
-    # (text-embedding-3-small) already anticipated an OpenAI-shaped
-    # provider (Phase 6, Task 6.3) — this key is what that provider
-    # actually authenticates with.
-    embedding_model: str = Field(default="text-embedding-3-small", alias="EMBEDDING_MODEL")
-    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    # Embeddings use a local sentence-transformers model (all-MiniLM-L6-v2).
+    # No external API key is required.
 
     # --- Rate limiting ---
     rate_limit_per_minute: int = Field(default=60, alias="RATE_LIMIT_PER_MINUTE")

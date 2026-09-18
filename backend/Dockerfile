@@ -32,7 +32,9 @@ COPY pyproject.toml ./
 # overhead and unnecessary surface area outside local dev.
 FROM base AS development
 
-RUN pip install --upgrade pip && pip install -e ".[dev]"
+RUN pip install --upgrade pip \
+    && pip install --index-url https://download.pytorch.org/whl/cpu torch \
+    && pip install -e ".[dev]"
 
 COPY . .
 

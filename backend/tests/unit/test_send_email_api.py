@@ -114,6 +114,34 @@ def test_send_endpoint_rejects_empty_recipient_list(
     assert fake_gmail_service.send_calls == []
 
 
+def test_send_endpoint_trims_recipient_whitespace(
+    app_no_lifespan: FastAPI, unit_client: TestClient, fake_gmail_service: FakeGmailService
+) -> None:
+    response = unit_client.post(
+        "/api/v1/gmail/send", json=_valid_payload(to=["  bob@example.com  "])
+    )
+
+    assert response.status_code == 200
+    assert fake_gmail_service.send_calls[0]["to"] == ["bob@example.com"]
+
+
+@pytest.mark.parametrize(
+    "recipient",
+    ["abc", "abc@", "@example.com", "abc@gmail", "abc@@gmail.com", "abc..test@example.com"],
+)
+def test_send_endpoint_rejects_malformed_recipient_forms(
+    app_no_lifespan: FastAPI,
+    unit_client: TestClient,
+    fake_gmail_service: FakeGmailService,
+    recipient: str,
+) -> None:
+    response = unit_client.post("/api/v1/gmail/send", json=_valid_payload(to=[recipient]))
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+    assert fake_gmail_service.send_calls == []
+
+
 def test_send_endpoint_rejects_missing_body(
     app_no_lifespan: FastAPI, unit_client: TestClient, fake_gmail_service: FakeGmailService
 ) -> None:

@@ -1,9 +1,9 @@
-from typing import Annotated
+﻿from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends
 
-from app.ai.schemas.ai_understanding import AIUnderstandingResult
+from app.ai.schemas.ai_understanding import AIUnderstandingResult, Entity
 from app.ai.services.understanding_service import AIUnderstandingService
 from app.application.services.email_service import EmailService
 from app.core.config import Settings
@@ -16,6 +16,7 @@ from app.core.di_container import (
     get_settings_dependency,
     get_understanding_service,
 )
+from app.ai.providers.llm_provider import LLMProvider
 from app.infrastructure.database.repositories.email_ai_understanding_repository import (
     EmailAIUnderstandingRepository,
 )
@@ -28,6 +29,7 @@ AIRepositoryDep = Annotated[
     EmailAIUnderstandingRepository, Depends(get_email_ai_understanding_repository)
 ]
 SettingsDep = Annotated[Settings, Depends(get_settings_dependency)]
+LLMProviderDep = Annotated[LLMProvider, Depends(get_llm_provider)]
 
 
 @router.post(
@@ -43,6 +45,18 @@ async def analyze_email(
     ai_repository: AIRepositoryDep,
 ) -> AIUnderstandingResult:
     email = await email_service.get_email(current_user, email_id)
+    # Check if analysis already exists
+    existing = await ai_repository.get_by_email_id(email.id)
+    if existing is not None:
+        return AIUnderstandingResult(
+            category=existing.category,
+            intent=existing.intent,
+            urgency=existing.urgency,
+            sentiment=existing.sentiment,
+            entities=[Entity(type=e['type'], value=e['value']) for e in existing.entities],
+            summary=existing.summary,
+            confidence=existing.confidence,
+        )
     result = await understanding_service.analyze_email(email)
     await ai_repository.upsert(email.id, result)
     return result
@@ -55,12 +69,12 @@ async def analyze_email(
 async def generate_email_content(
     current_user: CurrentUser,
     settings: SettingsDep,
+    llm_provider: LLMProviderDep,
     to: str = "",
     subject: str = "",
     body: str = "",
     instructions: str = "",
 ) -> dict[str, str]:
-    llm_provider = get_llm_provider(settings)
     generated_text = await llm_provider.generate_text(
         system_prompt="You are a professional email writing assistant",
         user_prompt=(

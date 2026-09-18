@@ -203,6 +203,32 @@ def test_parses_multiple_attachments(parser: EmailParser) -> None:
     assert result.has_attachments is True
 
 
+def test_preserves_long_gmail_attachment_id(parser: EmailParser) -> None:
+    long_attachment_id = "attachment-" + "x" * 300
+    raw_message = {
+        "id": "msg-long-attachment",
+        "threadId": "thread-long-attachment",
+        "snippet": "Long attachment ID",
+        "internalDate": "1735689600000",
+        "labelIds": ["INBOX"],
+        "payload": {
+            "mimeType": "multipart/mixed",
+            "headers": _headers(From="jane@example.com", To="bob@example.com"),
+            "parts": [
+                {
+                    "mimeType": "application/octet-stream",
+                    "filename": "large-token.bin",
+                    "body": {"attachmentId": long_attachment_id, "size": 10},
+                }
+            ],
+        },
+    }
+
+    result = parser.parse_message(raw_message)
+
+    assert result.attachments[0].attachment_id == long_attachment_id
+
+
 # ---------------------------------------------------------------------------
 # Edge cases: missing body, missing attachments, missing optional headers
 # ---------------------------------------------------------------------------

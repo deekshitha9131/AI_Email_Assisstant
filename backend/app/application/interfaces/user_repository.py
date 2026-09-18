@@ -54,7 +54,7 @@ class IUserRepository(Protocol):
         user_id: UUID,
         *,
         access_token: str,
-        refresh_token: str,
+        refresh_token: str | None,
         token_expiry: datetime,
         granted_scopes: list[str],
     ) -> None:

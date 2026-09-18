@@ -1,148 +1,109 @@
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+"""Tests for the local sentence-transformers embedding service.
 
-import openai
+Verifies that the EmbeddingService produces 384-dimensional vectors
+using the local all-MiniLM-L6-v2 model — no OpenAI API, no API key,
+no HTTP requests to external services.
+"""
+
+from unittest.mock import MagicMock, patch
+
 import pytest
 
-from app.ai.rag.embedding import EmbeddingService
-from app.core.config import Settings
-from app.core.constants import EMBEDDING_DIMENSIONS
-from app.domain.exceptions.ai import AIConfigurationError, EmbeddingProviderError
-
-BASE_ENV = {
-    "APP_ENV": "development",
-    "APP_DEBUG": "true",
-    "APP_SECRET_KEY": "dev-secret",
-    "DATABASE_URL": "postgresql+asyncpg://u:p@h:5432/d",
-    "REDIS_URL": "redis://h:6379/0",
-    "CELERY_BROKER_URL": "redis://h:6379/1",
-    "CELERY_RESULT_BACKEND": "redis://h:6379/1",
-    "TOKEN_ENCRYPTION_KEY": "test-token-encryption-key-value",
-    "CORS_ORIGINS": "http://localhost:5173",
-    "OPENAI_API_KEY": "test-openai-key",
-}
+from app.ai.rag.embedding import EmbeddingService, _load_model
+from app.core.constants import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL_NAME
+from app.domain.exceptions.ai import EmbeddingProviderError
 
 
-def _settings(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> Settings:
-    env = {**BASE_ENV, **overrides}
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    return Settings(_env_file=None)  # type: ignore[call-arg]
+@pytest.fixture
+def service() -> EmbeddingService:
+    return EmbeddingService()
 
 
-def _embedding_response(vectors: list[list[float]]) -> SimpleNamespace:
-    return SimpleNamespace(data=[SimpleNamespace(embedding=v) for v in vectors])
-
-
-def _valid_vector() -> list[float]:
-    return [0.1] * EMBEDDING_DIMENSIONS
-
-
-@patch("app.ai.rag.embedding.AsyncOpenAI")
-async def test_embed_text_returns_vector(
-    mock_openai_cls: MagicMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    mock_client = MagicMock()
-    mock_client.embeddings.create = AsyncMock(return_value=_embedding_response([_valid_vector()]))
-    mock_openai_cls.return_value = mock_client
-
-    service = EmbeddingService(_settings(monkeypatch))
+async def test_embed_text_returns_correct_dimension(service: EmbeddingService) -> None:
+    """The local model must return exactly 384-dimensional vectors."""
     result = await service.embed_text("hello world")
-
     assert len(result) == EMBEDDING_DIMENSIONS
-    call_kwargs = mock_client.embeddings.create.call_args.kwargs
-    assert call_kwargs["input"] == "hello world"
+    assert len(result) == 384
 
 
-@patch("app.ai.rag.embedding.AsyncOpenAI")
-async def test_embed_text_uses_configured_model(
-    mock_openai_cls: MagicMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    mock_client = MagicMock()
-    mock_client.embeddings.create = AsyncMock(return_value=_embedding_response([_valid_vector()]))
-    mock_openai_cls.return_value = mock_client
-
-    settings = _settings(monkeypatch, EMBEDDING_MODEL="custom-embedding-model")
-    service = EmbeddingService(settings)
-    await service.embed_text("hello")
-
-    call_kwargs = mock_client.embeddings.create.call_args.kwargs
-    assert call_kwargs["model"] == "custom-embedding-model"
+async def test_embed_text_returns_list_of_floats(service: EmbeddingService) -> None:
+    result = await service.embed_text("test input")
+    assert isinstance(result, list)
+    assert all(isinstance(x, float) for x in result)
 
 
-@patch("app.ai.rag.embedding.AsyncOpenAI")
-async def test_embed_texts_returns_one_vector_per_input(
-    mock_openai_cls: MagicMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    mock_client = MagicMock()
-    mock_client.embeddings.create = AsyncMock(
-        return_value=_embedding_response([_valid_vector(), _valid_vector(), _valid_vector()])
-    )
-    mock_openai_cls.return_value = mock_client
-
-    service = EmbeddingService(_settings(monkeypatch))
-    results = await service.embed_texts(["a", "b", "c"])
+async def test_embed_texts_returns_one_vector_per_input(service: EmbeddingService) -> None:
+    texts = ["alpha", "beta", "gamma"]
+    results = await service.embed_texts(texts)
 
     assert len(results) == 3
     for vector in results:
         assert len(vector) == EMBEDDING_DIMENSIONS
 
 
-async def test_embed_texts_with_empty_list_returns_empty_without_calling_api(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = EmbeddingService(_settings(monkeypatch))
+async def test_embed_texts_with_empty_list_returns_empty(service: EmbeddingService) -> None:
     result = await service.embed_texts([])
     assert result == []
 
 
-async def test_missing_api_key_raises_configuration_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = EmbeddingService(_settings(monkeypatch, OPENAI_API_KEY=""))
+async def test_same_input_produces_compatible_vectors(service: EmbeddingService) -> None:
+    """Same input text should produce vectors of the same dimension."""
+    v1 = await service.embed_text("consistent input")
+    v2 = await service.embed_text("consistent input")
 
-    with pytest.raises(AIConfigurationError):
-        await service.embed_text("hello")
-
-
-@patch("app.ai.rag.embedding.AsyncOpenAI")
-async def test_provider_api_failure_raises_embedding_provider_error(
-    mock_openai_cls: MagicMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    mock_client = MagicMock()
-    mock_client.embeddings.create = AsyncMock(
-        side_effect=openai.APIConnectionError(request=MagicMock())
-    )
-    mock_openai_cls.return_value = mock_client
-
-    service = EmbeddingService(_settings(monkeypatch))
-
-    with pytest.raises(EmbeddingProviderError):
-        await service.embed_text("hello")
+    assert len(v1) == len(v2) == EMBEDDING_DIMENSIONS
+    # Vectors should be numerically identical for deterministic model
+    for a, b in zip(v1, v2, strict=True):
+        assert abs(a - b) < 1e-6
 
 
-@patch("app.ai.rag.embedding.AsyncOpenAI")
-async def test_wrong_dimensionality_raises_embedding_provider_error(
-    mock_openai_cls: MagicMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    mock_client = MagicMock()
-    mock_client.embeddings.create = AsyncMock(return_value=_embedding_response([[0.1, 0.2, 0.3]]))
-    mock_openai_cls.return_value = mock_client
+async def test_different_inputs_produce_different_vectors(service: EmbeddingService) -> None:
+    v1 = await service.embed_text("hello world")
+    v2 = await service.embed_text("goodbye universe")
 
-    service = EmbeddingService(_settings(monkeypatch))
-
-    with pytest.raises(EmbeddingProviderError):
-        await service.embed_text("hello")
+    assert v1 != v2
 
 
-@patch("app.ai.rag.embedding.AsyncOpenAI")
-async def test_client_is_built_once_and_memoized(
-    mock_openai_cls: MagicMock, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    mock_client = MagicMock()
-    mock_client.embeddings.create = AsyncMock(return_value=_embedding_response([_valid_vector()]))
-    mock_openai_cls.return_value = mock_client
+async def test_model_loads_successfully() -> None:
+    """The all-MiniLM-L6-v2 model should load without error."""
+    model = _load_model()
+    assert model is not None
 
-    service = EmbeddingService(_settings(monkeypatch))
-    await service.embed_text("first")
-    await service.embed_text("second")
 
-    assert mock_openai_cls.call_count == 1
+async def test_model_is_cached() -> None:
+    """Model loading should be memoized — same instance returned."""
+    m1 = _load_model()
+    m2 = _load_model()
+    assert m1 is m2
+
+
+async def test_no_openai_api_key_required(service: EmbeddingService) -> None:
+    """EmbeddingService must work without any OPENAI_API_KEY."""
+    # If this call succeeds, no OpenAI key was needed
+    result = await service.embed_text("no api key needed")
+    assert len(result) == EMBEDDING_DIMENSIONS
+
+
+async def test_no_openai_import_in_embedding_module() -> None:
+    """Verify the embedding module does not import openai."""
+    import app.ai.rag.embedding as mod
+    source_file = mod.__file__
+    assert source_file is not None
+    with open(source_file) as f:
+        source = f.read()
+    assert "import openai" not in source
+    assert "from openai" not in source
+    assert "AsyncOpenAI" not in source
+
+
+async def test_embed_text_model_load_failure_raises_provider_error() -> None:
+    """If the model fails to load, EmbeddingProviderError is raised."""
+    with patch("app.ai.rag.embedding._load_model", side_effect=EmbeddingProviderError("boom")):
+        service = EmbeddingService()
+        with pytest.raises(EmbeddingProviderError):
+            await service.embed_text("hello")
+
+
+async def test_embedding_model_name_is_correct() -> None:
+    """The configured model name should be all-MiniLM-L6-v2."""
+    assert EMBEDDING_MODEL_NAME == "all-MiniLM-L6-v2"
