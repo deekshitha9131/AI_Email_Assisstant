@@ -32,11 +32,11 @@ async def prepared_db(db_engine: AsyncEngine):
 @pytest_asyncio.fixture
 async def repo(prepared_db: AsyncEngine):
     session_factory = async_sessionmaker(bind=prepared_db, expire_on_commit=False)
-    session = session_factory()
-    try:
-        yield UserRepository(session, TokenCipher(get_settings()))
-    finally:
-        await session.close()
+    async with session_factory() as session:
+        try:
+            yield UserRepository(session, TokenCipher(get_settings()))
+        finally:
+            await session.rollback()
 
 
 async def test_save_and_get_oauth_tokens_round_trip(repo: UserRepository) -> None:

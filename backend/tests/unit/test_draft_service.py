@@ -13,7 +13,7 @@ from app.domain.entities.user import User
 from app.domain.enums.draft_status import DraftStatus
 from app.domain.enums.user_status import UserStatus
 from app.domain.exceptions.ai import AIProviderError, InvalidAIResponseError
-from app.domain.exceptions.draft import DraftUnderstandingMissingError, DraftNotFoundError
+from app.domain.exceptions.draft import DraftNotFoundError, DraftUnderstandingMissingError
 from app.domain.exceptions.email import EmailNotFoundError
 
 
@@ -66,6 +66,9 @@ def _stored_understanding(**overrides) -> EmailAIUnderstanding:
         entities=[{"type": "organization", "value": "Airline"}],
         summary="Flight was cancelled.",
         confidence=0.9,
+        follow_up_needed=False,
+        follow_up_date=None,
+        follow_up_reason=None,
         created_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
     )
@@ -190,7 +193,21 @@ class FakeDraftRepository:
 
     async def update_status(self, draft_id, status):
         self.update_status_calls.append((draft_id, status))
-        return self._draft or _draft(status=status)
+        if self._draft is not None:
+            self._draft.status = status
+            return self._draft
+        return _draft(status=status)
+
+    async def claim_for_approval(self, draft_id: UUID, user_id: UUID) -> Draft | None:
+        if (
+            self._draft
+            and self._draft.id == draft_id
+            and self._owner_user_id == user_id
+            and self._draft.status == DraftStatus.GENERATED
+        ):
+            self._draft.status = DraftStatus.APPROVED
+            return self._draft
+        return None
 
     async def get_by_id_for_user(self, draft_id: UUID, user_id: UUID) -> Draft | None:
         self.get_by_id_for_user_calls.append((draft_id, user_id))
@@ -212,9 +229,13 @@ def _make_service(
     draft_context_builder=None,
     draft_generator=None,
     draft_repository=None,
+    gmail_service=None,
+    thread_service=None,
 ) -> DraftService:
     return DraftService(
         email_service=email_service or FakeEmailService(email=_email()),
+        gmail_service=gmail_service or FakeGmailService(),
+        thread_service=thread_service or FakeThreadService(),
         understanding_repository=understanding_repository
         or FakeUnderstandingRepository(understanding=_stored_understanding()),
         retrieval_service=retrieval_service or FakeRetrievalService(),
@@ -487,8 +508,48 @@ async def test_approve_draft_calls_repository_and_returns_approved_draft() -> No
     result = await service.approve_draft(user, draft_id)
 
     assert result is approved_draft
-    assert service._draft_repository.update_status_calls == [(draft_id, DraftStatus.APPROVED)]
+    assert service._draft_repository.update_status_calls == []
     assert service._draft_repository.get_by_id_for_user_calls == [(draft_id, user.id)]
+
+
+class FakeThreadService:
+    async def get_thread(self, user, thread_id):
+        return type("Thread", (), {"gmail_thread_id": "gmail-thread-1"})(), []
+
+
+class FakeGmailService:
+    def __init__(self) -> None:
+        self.send_calls: list[dict] = []
+
+    async def send_email(self, user, **kwargs):
+        self.send_calls.append(kwargs)
+
+
+async def test_approve_generated_draft_sends_and_marks_sent() -> None:
+    user = _user()
+    draft_id = uuid4()
+    draft = _draft(id=draft_id, status=DraftStatus.GENERATED)
+    draft_repository = FakeDraftRepository(draft=draft, owner_user_id=user.id)
+    gmail_service = FakeGmailService()
+    service = _make_service(
+        draft_repository=draft_repository,
+        gmail_service=gmail_service,
+        email_service=FakeEmailService(email=_email()),
+    )
+
+    result = await service.approve_draft(user, draft_id)
+    repeated_result = await service.approve_draft(user, draft_id)
+
+    assert result.status == DraftStatus.SENT
+    assert repeated_result.status == DraftStatus.SENT
+    assert gmail_service.send_calls == [
+        {
+            "to": ["jane@example.com"],
+            "subject": "Flight Cancelled",
+            "body_text": "Generated draft body.",
+            "thread_id": "gmail-thread-1",
+        }
+    ]
 
 
 async def test_approve_draft_raises_when_draft_not_found() -> None:

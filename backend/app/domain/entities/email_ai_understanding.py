@@ -14,5 +14,8 @@ class EmailAIUnderstanding:
     entities: list[dict[str, str]]
     summary: str
     confidence: float
+    follow_up_needed: bool
+    follow_up_date: datetime | None
+    follow_up_reason: str | None
     created_at: datetime
     updated_at: datetime

@@ -1,5 +1,7 @@
 export type DraftStatus = "generated" | "approved" | "rejected" | "sent";
 
+import type { EmailDetail } from "./email";
+
 export interface Draft {
   id: string;
   email_id: string;
@@ -42,6 +44,16 @@ export interface ComposeDraftPayload {
 
 export interface ComposeDraftListResponse {
   items: ComposeDraft[];
+  page: number;
+  page_size: number;
+}
+
+export interface DraftReview extends Draft {
+  email: EmailDetail;
+}
+
+export interface DraftReviewListResponse {
+  items: DraftReview[];
   page: number;
   page_size: number;
 }

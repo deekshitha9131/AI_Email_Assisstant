@@ -1,16 +1,44 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.application.services.draft_service import DraftService
 from app.core.constants import OpenAPITags
 from app.core.di_container import CurrentUser, get_draft_service
-from app.presentation.api.v1.schemas.draft import DraftCreateRequest, DraftResponse, DraftUpdateRequest
+from app.presentation.api.v1.schemas.draft import (
+    DraftCreateRequest,
+    DraftResponse,
+    DraftReviewListResponse,
+    DraftReviewResponse,
+    DraftUpdateRequest,
+)
+from app.presentation.api.v1.schemas.email import EmailDetail
 
 router = APIRouter(prefix="/drafts", tags=[OpenAPITags.DRAFTS])
 
 DraftServiceDep = Annotated[DraftService, Depends(get_draft_service)]
+
+
+@router.get("", response_model=DraftReviewListResponse)
+async def list_drafts(
+    current_user: CurrentUser,
+    draft_service: DraftServiceDep,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+) -> DraftReviewListResponse:
+    reviews = await draft_service.list_drafts(current_user, page=page, page_size=page_size)
+    return DraftReviewListResponse(
+        items=[
+            DraftReviewResponse(
+                **DraftResponse.model_validate(draft).model_dump(),
+                email=EmailDetail.model_validate(email),
+            )
+            for draft, email in reviews
+        ],
+        page=page,
+        page_size=page_size,
+    )
 
 @router.post(
     "",

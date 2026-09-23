@@ -38,6 +38,7 @@ ENV/
 .pytest_cache/
 .coverage
 .coverage.*
+coverage.xml
 htmlcov/
 .mypy_cache/
 .ruff_cache/
@@ -74,3 +75,4 @@ logs/
 # ---------- Alembic ----------
 # (migration files ARE tracked; this excludes only local scratch scripts)
 backend/alembic/versions/*.pyc
+.claude/

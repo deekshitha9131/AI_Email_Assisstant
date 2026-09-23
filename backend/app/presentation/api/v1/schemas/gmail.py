@@ -9,6 +9,8 @@ service or Gmail API are ever involved, consistent with UserCreate's
 existing use of EmailStr.
 """
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
@@ -81,3 +83,24 @@ class GmailSendResponse(BaseModel):
     success: bool
     gmail_message_id: str
     gmail_thread_id: str
+
+
+class GmailSentMessageResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    gmail_message_id: str
+    gmail_thread_id: str
+    sender: str
+    recipients: list[str]
+    cc: list[str]
+    bcc: list[str]
+    subject: str | None
+    snippet: str
+    body_text: str | None
+    body_html: str | None
+    sent_at: datetime
+
+
+class GmailSentMessagesResponse(BaseModel):
+    items: list[GmailSentMessageResponse]
+    next_page_token: str | None = None

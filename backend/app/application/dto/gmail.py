@@ -83,3 +83,28 @@ class GmailSendResult:
     success: bool
     gmail_message_id: str
     gmail_thread_id: str
+
+
+@dataclass
+class GmailSentMessage:
+    """Parsed message returned by the authenticated Gmail Sent mailbox."""
+
+    gmail_message_id: str
+    gmail_thread_id: str
+    sender: str
+    recipients: list[str]
+    cc: list[str]
+    bcc: list[str]
+    subject: str | None
+    snippet: str
+    body_text: str | None
+    body_html: str | None
+    sent_at: datetime
+
+
+@dataclass
+class GmailSentMessages:
+    """One page of messages from Gmail's Sent mailbox."""
+
+    items: list[GmailSentMessage]
+    next_page_token: str | None = None

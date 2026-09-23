@@ -3,6 +3,7 @@
 into the `base` submodule directly.
 """
 
+from app.domain.exceptions.automation import AutomationAPIError
 from app.domain.exceptions.base import (
     BusinessValidationError,
     ConflictError,
@@ -19,4 +20,5 @@ __all__ = [
     "BusinessValidationError",
     "UnauthorizedError",
     "ForbiddenError",
+    "AutomationAPIError",
 ]

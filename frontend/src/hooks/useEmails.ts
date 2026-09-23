@@ -49,24 +49,24 @@ export function useEmails(params: UseEmailsParams = {}): UseEmailsResult {
         // Otherwise use regular list endpoint (also handles empty search)
         const listParams = { ...params };
         // Remove search param if it exists since listEmails doesn't accept it
-        delete (listParams as any).search;
+        delete listParams.search;
         result = await listEmails({ ...listParams, page, page_size: PAGE_SIZE });
       }
       setEmails(result.items);
       setTotal(result.total);
       setStatus("success");
-    } catch (error) {
+    } catch {
       // If search fails with validation error (empty query), fall back to regular list
       if (params.search && !params.search.trim()) {
         try {
           const listParams = { ...params };
-          delete (listParams as any).search;
+          delete listParams.search;
           const result = await listEmails({ ...listParams, page, page_size: PAGE_SIZE });
           setEmails(result.items);
           setTotal(result.total);
           setStatus("success");
           return;
-        } catch (fallbackError) {
+        } catch {
           setErrorMessage("We couldn't load your inbox. Please try again.");
           setStatus("error");
           return;

@@ -1,4 +1,4 @@
-from app.domain.exceptions.base import BusinessValidationError, DomainError
+from app.domain.exceptions.base import BusinessValidationError, ConflictError, DomainError
 
 
 class AIConfigurationError(DomainError):
@@ -24,6 +24,10 @@ class AIProviderError(DomainError):
 
 class InvalidAIResponseError(BusinessValidationError):
     code = "AI_INVALID_RESPONSE"
+
+
+class PriorityNotClassifiedError(ConflictError):
+    code = "PRIORITY_NOT_CLASSIFIED"
 
 
 class EmbeddingProviderError(DomainError):

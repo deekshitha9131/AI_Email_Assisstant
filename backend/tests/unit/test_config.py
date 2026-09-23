@@ -21,6 +21,8 @@ BASE_VALID_ENV = {
     "CELERY_RESULT_BACKEND": "redis://h:6379/1",
     "TOKEN_ENCRYPTION_KEY": "dev-token-key-value",
     "CORS_ORIGINS": "http://localhost:5173",
+    "N8N_AUTOMATION_TOKEN": "test-n8n-token",
+    "N8N_AUTOMATION_USER_ID": "11111111-1111-1111-1111-111111111111",
 }
 
 
@@ -46,6 +48,8 @@ def test_valid_production_config_succeeds(monkeypatch: pytest.MonkeyPatch) -> No
         TOKEN_ENCRYPTION_KEY="a-real-production-token-key",
         GOOGLE_CLIENT_ID="a-real-google-client-id",
         GOOGLE_CLIENT_SECRET="a-real-google-client-secret",
+        N8N_AUTOMATION_TOKEN="a-real-n8n-token",
+        N8N_AUTOMATION_USER_ID="22222222-2222-2222-2222-222222222222",
     )
     assert settings.is_production is True
 

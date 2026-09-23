@@ -1,10 +1,10 @@
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from openai import APIConnectionError
-from openai import APIStatusError
 from httpx import Request, Response
+from openai import APIConnectionError, APIStatusError
 
 from app.ai.providers.llm_provider import LLMProvider
 from app.ai.schemas.ai_understanding import AIUnderstandingResult
@@ -60,7 +60,9 @@ async def test_understand_email_uses_groq_json_and_validates_result(
         return_value=_completion(
             '{"category":"travel","intent":"cancellation","urgency":"high",'
             '"sentiment":"negative","entities":[],"summary":"Flight cancelled.",'
-            '"confidence":0.94}'
+            '"confidence":0.94,"follow_up_needed":true,'
+            '"follow_up_date":"2026-08-15T09:00:00Z",'
+            '"follow_up_reason":"Contact the airline after the cancellation."}'
         )
     )
     mock_client_cls.return_value = mock_client
@@ -69,6 +71,8 @@ async def test_understand_email_uses_groq_json_and_validates_result(
 
     assert isinstance(result, AIUnderstandingResult)
     assert result.category.value == "travel"
+    assert result.follow_up_needed is True
+    assert result.follow_up_date == datetime(2026, 8, 15, 9, tzinfo=UTC)
     kwargs = mock_client.chat.completions.create.call_args.kwargs
     assert kwargs["model"] == "openai/gpt-oss-20b"
     assert kwargs["max_tokens"] == 2048

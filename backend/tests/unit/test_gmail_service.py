@@ -7,6 +7,7 @@ than a mocked one, matching test_auth_service.py's philosophy of
 faking the network boundary, not the logic under test.
 """
 
+import asyncio
 import base64
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -258,6 +259,23 @@ def _make_service(
         "app.application.services.gmail_service.GmailClient",
         lambda *, oauth_token, settings: gmail_client,
     )
+
+    from app.workers.ai_tasks.indexing_tasks import index_email_task
+    from app.workers.classification_tasks.analysis_tasks import analyze_email_task
+
+    def _fake_index_delay(email_id: str):
+        if indexing_service is None:
+            return None
+        for email in email_repository._emails.values():
+            if str(email.id) == email_id:
+                loop = asyncio.get_running_loop()
+                loop.create_task(indexing_service.index_email(email))
+                return None
+        return None
+
+    monkeypatch.setattr(index_email_task, "delay", _fake_index_delay)
+    monkeypatch.setattr(analyze_email_task, "delay", lambda *args, **kwargs: None)
+
     return service, thread_repository, email_repository
 
 
@@ -301,22 +319,24 @@ async def test_sync_mailbox_keeps_email_when_embedding_fails(
     user = _user()
     messages = {"m1": _raw_message("m1", "t1")}
     indexer = FakeIndexingService(EmbeddingProviderError("quota exhausted"))
+    gmail_client = FakeGmailClient(
+        pages=[{"messages": [{"id": "m1", "threadId": "t1"}]}],
+        messages_by_id=messages,
+    )
     service, _, email_repo = _make_service(
         monkeypatch,
-        gmail_client=FakeGmailClient(
-            pages=[{"messages": [{"id": "m1", "threadId": "t1"}]}],
-            messages_by_id=messages,
-        ),
+        gmail_client=gmail_client,
         oauth_token=_oauth_token(user.id),
         indexing_service=indexer,
     )
 
     summary = await service.sync_mailbox(user)
+    await asyncio.sleep(0)
 
     assert summary.emails_synced == 1
     assert email_repo.upsert_calls == 1
     assert indexer.indexed_ids == ["m1"]
-    assert email_repo.upsert_calls == 2
+    assert email_repo.upsert_calls == 1
     assert gmail_client.list_calls == [None]
     assert gmail_client.list_label_ids == [["INBOX"]]
 

@@ -1,1 +1,0 @@
-No Python at '"C:\Users\DEEKSHITHA\AppData\Local\Programs\Python\Python311\python.exe'

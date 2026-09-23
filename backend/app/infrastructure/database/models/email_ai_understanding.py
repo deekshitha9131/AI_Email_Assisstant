@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from sqlalchemy import Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -28,5 +29,8 @@ class EmailAIUnderstandingModel(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     entities: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    follow_up_needed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    follow_up_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    follow_up_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     email: Mapped["EmailModel"] = relationship(back_populates="ai_understanding")  # noqa: F821

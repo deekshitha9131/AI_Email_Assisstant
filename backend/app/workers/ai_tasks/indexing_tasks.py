@@ -9,7 +9,7 @@ from typing import cast
 
 import structlog
 
-from app.ai.chunker import EmailChunker
+from app.ai.rag.chunker import EmailChunker
 from app.ai.preprocessing.email_preprocessor import EmailPreprocessor
 from app.ai.rag.embedding import EmbeddingService
 from app.core.celery_app import celery_app

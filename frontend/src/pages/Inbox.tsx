@@ -21,7 +21,7 @@ function Inbox() {
   // Reset to first page when search query changes
   useEffect(() => {
     setPage(1);
-  }, [searchQuery]);
+  }, [searchQuery, setPage]);
 
   function describeSyncError(error: unknown): string {
     if (!(error instanceof ApiError)) return "Inbox sync failed unexpectedly. Check the backend logs.";

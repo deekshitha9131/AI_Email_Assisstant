@@ -1,9 +1,11 @@
+import secrets
 from functools import lru_cache
 from typing import Annotated
 
 import httpx
 import redis.asyncio as redis
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.context.draft_context import DraftContextBuilder
@@ -20,7 +22,9 @@ from app.application.services.auth_service import AuthService
 from app.application.services.compose_draft_service import ComposeDraftService
 from app.application.services.draft_service import DraftService
 from app.application.services.email_service import EmailService
+from app.application.services.follow_up_service import FollowUpService
 from app.application.services.gmail_service import GmailService
+from app.application.services.notification_service import NotificationService
 from app.application.services.thread_service import ThreadService
 from app.core.config import Settings, get_settings
 from app.core.constants import SESSION_COOKIE_NAME
@@ -35,6 +39,8 @@ from app.infrastructure.database.repositories.email_ai_understanding_repository 
 )
 from app.infrastructure.database.repositories.email_chunk_repository import EmailChunkRepository
 from app.infrastructure.database.repositories.email_repository import EmailRepository
+from app.infrastructure.database.repositories.follow_up_repository import FollowUpRepository
+from app.infrastructure.database.repositories.notification_repository import NotificationRepository
 from app.infrastructure.database.repositories.thread_repository import ThreadRepository
 from app.infrastructure.database.repositories.user_repository import UserRepository
 from app.infrastructure.database.session import get_db_session
@@ -127,10 +133,43 @@ async def get_current_user(request: Request) -> User:
         return await auth_service.get_current_user(session_id)
 
 
+_automation_bearer = HTTPBearer(auto_error=False)
+
+
+async def get_automation_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_automation_bearer)],
+    settings: Annotated[Settings, Depends(get_settings_dependency)],
+    user_repository: Annotated[UserRepository, Depends(get_user_repository)],
+) -> User:
+    """Authenticate n8n with a dedicated bearer token and configured user."""
+    if (
+        credentials is None
+        or credentials.scheme.lower() != "bearer"
+        or not settings.n8n_automation_token
+        or not secrets.compare_digest(credentials.credentials, settings.n8n_automation_token)
+        or settings.n8n_automation_user_id is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid automation credentials.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = await user_repository.get_by_id(settings.n8n_automation_user_id)
+    if user is None or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid automation credentials.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
 DbSession = Annotated[AsyncSession, Depends(get_db_session)]
 RedisClient = Annotated[redis.Redis, Depends(get_redis)]
 AppSettings = Annotated[Settings, Depends(get_settings_dependency)]
 CurrentUser = Annotated[User, Depends(get_current_user)]
+AutomationUser = Annotated[User, Depends(get_automation_user)]
 
 
 def get_thread_repository(
@@ -145,16 +184,52 @@ def get_email_repository(
     return EmailRepository(db)
 
 
+def get_notification_repository(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> NotificationRepository:
+    return NotificationRepository(db)
+
+
+def get_follow_up_repository(
+    db: Annotated[AsyncSession, Depends(get_db_session)],
+) -> FollowUpRepository:
+    return FollowUpRepository(db)
+
+
 def get_email_service(
     email_repository: Annotated[EmailRepository, Depends(get_email_repository)],
 ) -> EmailService:
     return EmailService(email_repository=email_repository)
 
 
+def get_notification_service(
+    email_service: Annotated[EmailService, Depends(get_email_service)],
+    notification_repository: Annotated[
+        NotificationRepository, Depends(get_notification_repository)
+    ],
+) -> NotificationService:
+    return NotificationService(
+        email_service=email_service,
+        notification_repository=notification_repository,
+    )
+
+
 def get_thread_service(
     thread_repository: Annotated[ThreadRepository, Depends(get_thread_repository)],
 ) -> ThreadService:
     return ThreadService(thread_repository=thread_repository)
+
+
+def get_follow_up_service(
+    email_service: Annotated[EmailService, Depends(get_email_service)],
+    thread_service: Annotated[ThreadService, Depends(get_thread_service)],
+    repository: Annotated[FollowUpRepository, Depends(get_follow_up_repository)],
+) -> FollowUpService:
+    return FollowUpService(
+        email_service=email_service,
+        thread_service=thread_service,
+        repository=repository,
+    )
 
 
 def get_email_preprocessor() -> EmailPreprocessor:
@@ -244,6 +319,8 @@ def get_draft_context_builder() -> DraftContextBuilder:
 
 def get_draft_service(
     email_service: Annotated[EmailService, Depends(get_email_service)],
+    gmail_service: Annotated[GmailService, Depends(get_gmail_service)],
+    thread_service: Annotated[ThreadService, Depends(get_thread_service)],
     understanding_repository: Annotated[
         EmailAIUnderstandingRepository, Depends(get_email_ai_understanding_repository)
     ],
@@ -255,6 +332,8 @@ def get_draft_service(
 ) -> DraftService:
     return DraftService(
         email_service=email_service,
+        gmail_service=gmail_service,
+        thread_service=thread_service,
         understanding_repository=understanding_repository,
         retrieval_service=retrieval_service,
         rag_context_builder=rag_context_builder,

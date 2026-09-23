@@ -63,6 +63,10 @@ class FakeEmailRepository:
     async def get_by_id(self, email_id):
         return self._emails.get(email_id)
 
+    async def get_by_user_id_for_list(self, user_id, **kwargs):
+        self.get_by_user_id_calls.append({"user_id": user_id, **kwargs})
+        return [e for e in self._emails.values() if e.user_id == user_id]
+
     async def get_by_user_id(self, user_id, **kwargs):
         self.get_by_user_id_calls.append({"user_id": user_id, **kwargs})
         return [e for e in self._emails.values() if e.user_id == user_id]

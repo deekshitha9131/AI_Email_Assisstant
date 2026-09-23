@@ -77,6 +77,12 @@ class GmailSyncRequiredError(ConflictError):
     code = "GMAIL_INITIAL_SYNC_REQUIRED"
 
 
+class GmailSyncInProgressError(ConflictError):
+    """Raised when an incremental sync is already running for the user."""
+
+    code = "GMAIL_SYNC_IN_PROGRESS"
+
+
 class GmailHistoryExpiredError(ConflictError):
     """Raised when Gmail no longer retains the stored incremental cursor."""
 

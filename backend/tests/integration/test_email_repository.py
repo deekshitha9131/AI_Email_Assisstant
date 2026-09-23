@@ -37,11 +37,12 @@ def session_factory(prepared_db: AsyncEngine) -> async_sessionmaker[AsyncSession
 
 @pytest_asyncio.fixture
 async def repo(session_factory: async_sessionmaker[AsyncSession]):
-    session = session_factory()
-    try:
-        yield EmailRepository(session)
-    finally:
-        await session.close()
+    async with session_factory() as session:
+        try:
+            yield EmailRepository(session)
+        finally:
+            await session.rollback()
+            await session.close()
 
 
 async def _create_user(session_factory: async_sessionmaker[AsyncSession]) -> uuid.UUID:

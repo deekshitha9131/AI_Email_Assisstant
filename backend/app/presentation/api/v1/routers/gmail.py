@@ -8,7 +8,7 @@ concerns (request body, response model) and the service call.
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 
 from app.application.services.gmail_service import GmailService
 from app.core.constants import OpenAPITags
@@ -17,6 +17,8 @@ from app.presentation.api.v1.schemas.gmail import (
     GmailIncrementalSyncResponse,
     GmailSendRequest,
     GmailSendResponse,
+    GmailSentMessageResponse,
+    GmailSentMessagesResponse,
     GmailSyncRequest,
     GmailSyncResponse,
 )
@@ -24,6 +26,28 @@ from app.presentation.api.v1.schemas.gmail import (
 router = APIRouter(prefix="/gmail", tags=[OpenAPITags.GMAIL])
 
 GmailServiceDep = Annotated[GmailService, Depends(get_gmail_service)]
+
+
+@router.get(
+    "/sent",
+    summary="List the authenticated user's sent emails",
+    description="Reads a page of sent messages from the authenticated user's Gmail account."
+    " Message content is parsed for display and access tokens are never returned.",
+    response_model=GmailSentMessagesResponse,
+)
+async def list_sent_messages(
+    current_user: CurrentUser,
+    gmail_service: GmailServiceDep,
+    page_token: str | None = Query(default=None),
+    page_size: int = Query(default=25, ge=1, le=100),
+) -> GmailSentMessagesResponse:
+    result = await gmail_service.list_sent_messages(
+        current_user, page_token=page_token, max_results=page_size
+    )
+    return GmailSentMessagesResponse(
+        items=[GmailSentMessageResponse.model_validate(item) for item in result.items],
+        next_page_token=result.next_page_token,
+    )
 
 
 @router.post(

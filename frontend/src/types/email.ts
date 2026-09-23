@@ -28,6 +28,20 @@ export interface EmailDetail extends EmailSummary {
   attachments: AttachmentSummary[];
 }
 
+export interface SentEmail {
+  gmail_message_id: string;
+  gmail_thread_id: string;
+  sender: string;
+  recipients: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string | null;
+  snippet: string;
+  body_text: string | null;
+  body_html: string | null;
+  sent_at: string;
+}
+
 export interface AIUnderstandingResult {
   category: string;
   intent: string;

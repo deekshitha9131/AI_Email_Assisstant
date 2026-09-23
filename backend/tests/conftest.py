@@ -9,8 +9,52 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings, get_settings
+from app.core.constants import EMBEDDING_DIMENSIONS
 from app.infrastructure.database.engine import create_db_engine, dispose_engine
 from app.main import create_app
+
+
+class FakeEmbeddingVector(list[float]):
+    def tolist(self) -> list[float]:
+        return list(self)
+
+
+class FakeEmbeddingModel:
+    def __init__(self) -> None:
+        self.calls: list[str | list[str]] = []
+
+    def encode(self, value: str | list[str], normalize_embeddings: bool = True) -> FakeEmbeddingVector | list[FakeEmbeddingVector]:
+        self.calls.append(value)
+
+        def vector_for(text: str) -> FakeEmbeddingVector:
+            seed = sum((index + 1) * ord(char) for index, char in enumerate(text))
+            return FakeEmbeddingVector(
+                [((seed + i * 13) % 997) / 997.0 for i in range(EMBEDDING_DIMENSIONS)]
+            )
+
+        if isinstance(value, str):
+            return vector_for(value)
+        return [vector_for(text) for text in value]
+
+
+@pytest.fixture(autouse=True)
+def fake_embedding_model(monkeypatch: pytest.MonkeyPatch) -> FakeEmbeddingModel:
+    """Keep all tests deterministic and offline by replacing the real SentenceTransformer loader."""
+    model = FakeEmbeddingModel()
+    monkeypatch.setattr("app.ai.rag.embedding._load_model", lambda: model)
+    return model
+
+
+@pytest.fixture(autouse=True)
+def celery_unit_test_mode(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Prevent unit tests from reaching a live Redis-backed Celery result backend."""
+    from app.workers.ai_tasks.indexing_tasks import index_email_task
+    from app.workers.classification_tasks.analysis_tasks import analyze_email_task
+
+    monkeypatch.setattr(index_email_task, "delay", lambda *args, **kwargs: None)
+    monkeypatch.setattr(analyze_email_task, "delay", lambda *args, **kwargs: None)
+
+    yield
 
 
 @pytest.fixture(scope="session")

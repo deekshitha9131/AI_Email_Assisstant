@@ -1,5 +1,6 @@
 import os
 from functools import lru_cache
+from uuid import UUID
 
 from pydantic import Field, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -61,6 +62,10 @@ class Settings(BaseSettings):
         default=604800,
         alias="SESSION_TTL_SECONDS",
     )  # 7 days
+
+    # --- n8n automation ---
+    n8n_automation_token: str = Field(default="", alias="N8N_AUTOMATION_TOKEN")
+    n8n_automation_user_id: UUID | None = Field(default=None, alias="N8N_AUTOMATION_USER_ID")
 
     # --- Token encryption ---
     token_encryption_key: str = Field(alias="TOKEN_ENCRYPTION_KEY")
@@ -174,6 +179,10 @@ class Settings(BaseSettings):
                 "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in production "
                 "— Google login cannot function without them."
             )
+        if not self.n8n_automation_token:
+            raise ValueError("N8N_AUTOMATION_TOKEN must be set in production.")
+        if self.n8n_automation_user_id is None:
+            raise ValueError("N8N_AUTOMATION_USER_ID must be set in production.")
 
         return self
 

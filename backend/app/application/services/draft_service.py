@@ -6,13 +6,15 @@ from app.ai.rag.retrieval import RetrievalService
 from app.ai.schemas.ai_understanding import AIUnderstandingResult, Entity
 from app.ai.services.draft_generator import DraftGenerator
 from app.application.services.email_service import EmailService
+from app.application.services.gmail_service import GmailService
+from app.application.services.thread_service import ThreadService
 from app.domain.entities.draft import Draft
+from app.domain.entities.email import Email
 from app.domain.entities.email_ai_understanding import EmailAIUnderstanding
 from app.domain.entities.user import User
 from app.domain.enums.draft_status import DraftStatus
 from app.domain.exceptions.draft import (
     DraftNotFoundError,
-    DraftStatusError,
     DraftUnderstandingMissingError,
 )
 from app.infrastructure.database.repositories.draft_repository import DraftRepository
@@ -38,6 +40,8 @@ class DraftService:
         self,
         *,
         email_service: EmailService,
+        gmail_service: GmailService,
+        thread_service: ThreadService,
         understanding_repository: EmailAIUnderstandingRepository,
         retrieval_service: RetrievalService,
         rag_context_builder: RAGContextBuilder,
@@ -46,6 +50,8 @@ class DraftService:
         draft_repository: DraftRepository,
     ) -> None:
         self._email_service = email_service
+        self._gmail_service = gmail_service
+        self._thread_service = thread_service
         self._understanding_repository = understanding_repository
         self._retrieval_service = retrieval_service
         self._rag_context_builder = rag_context_builder
@@ -96,6 +102,17 @@ class DraftService:
             raise DraftNotFoundError(f"No draft found with id {draft_id}.")
         return draft
 
+    async def list_drafts(
+        self, user: User, *, page: int = 1, page_size: int = 25
+    ) -> list[tuple[Draft, Email]]:
+        drafts = await self._draft_repository.list_by_user(
+            user.id, page=page, page_size=page_size, status=DraftStatus.GENERATED
+        )
+        reviews = []
+        for draft in drafts:
+            reviews.append((draft, await self._email_service.get_email(user, draft.email_id)))
+        return reviews
+
     async def update_draft(self, user: User, draft_id: UUID, body: str) -> Draft:
         """Update the body of a draft, ensuring it belongs to the user."""
         # First, verify ownership and existence via get_draft
@@ -104,8 +121,22 @@ class DraftService:
         return await self._draft_repository.update_body(draft_id, body)
 
     async def approve_draft(self, user: User, draft_id: UUID) -> Draft:
-        """Approve a draft, setting its status to APPROVED, ensuring it belongs to the user."""
-        # First, verify ownership and existence via get_draft
-        await self.get_draft(user, draft_id)
-        # Then update the status to APPROVED
-        return await self._draft_repository.update_status(draft_id, DraftStatus.APPROVED)
+        """Claim, send, and mark an owned generated draft as sent.
+
+        The repository claim is row-locked and only succeeds for generated
+        drafts, so repeated or concurrent approvals cannot send twice.
+        """
+        claimed = await self._draft_repository.claim_for_approval(draft_id, user.id)
+        if claimed is None:
+            return await self.get_draft(user, draft_id)
+
+        email = await self._email_service.get_email(user, claimed.email_id)
+        thread, _ = await self._thread_service.get_thread(user, email.thread_id)
+        await self._gmail_service.send_email(
+            user,
+            to=[email.sender],
+            subject=email.subject or "",
+            body_text=claimed.body,
+            thread_id=thread.gmail_thread_id,
+        )
+        return await self._draft_repository.update_status(draft_id, DraftStatus.SENT)

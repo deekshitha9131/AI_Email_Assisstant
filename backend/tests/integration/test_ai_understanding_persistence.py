@@ -120,11 +120,11 @@ async def test_full_round_trip_preserves_every_field(session_factory) -> None:
     email_id = await _create_user_and_email(session_factory)
     original = _full_ai_result()
 
-    repo = EmailAIUnderstandingRepository(session_factory())
-    await repo.upsert(email_id, original)
+    async with session_factory() as session:
+        repo = EmailAIUnderstandingRepository(session)
+        await repo.upsert(email_id, original)
 
-    verify_repo = EmailAIUnderstandingRepository(session_factory())
-    fetched = await verify_repo.get_by_email_id(email_id)
+        fetched = await repo.get_by_email_id(email_id)
 
     assert fetched is not None
     assert fetched.category == original.category.value
@@ -134,26 +134,30 @@ async def test_full_round_trip_preserves_every_field(session_factory) -> None:
     assert fetched.summary == original.summary
     assert fetched.confidence == pytest.approx(original.confidence)
     assert fetched.entities == [entity.model_dump() for entity in original.entities]
+    assert fetched.follow_up_needed is False
+    assert fetched.follow_up_date is None
+    assert fetched.follow_up_reason is None
     assert fetched.created_at is not None
     assert fetched.updated_at is not None
 
 
 async def test_reprocessing_updates_in_place_and_bumps_updated_at(session_factory) -> None:
     email_id = await _create_user_and_email(session_factory)
-    repo = EmailAIUnderstandingRepository(session_factory())
 
-    first = await repo.upsert(email_id, _full_ai_result())
+    async with session_factory() as session:
+        repo = EmailAIUnderstandingRepository(session)
+        first = await repo.upsert(email_id, _full_ai_result())
 
-    second_result = AIUnderstandingResult(
-        category=EmailCategory.OTHER,
-        intent=EmailIntent.INFORMATION,
-        urgency=EmailUrgency.LOW,
-        sentiment=EmailSentiment.NEUTRAL,
-        entities=[],
-        summary="Re-processed: content has changed.",
-        confidence=0.4,
-    )
-    second = await repo.upsert(email_id, second_result)
+        second_result = AIUnderstandingResult(
+            category=EmailCategory.OTHER,
+            intent=EmailIntent.INFORMATION,
+            urgency=EmailUrgency.LOW,
+            sentiment=EmailSentiment.NEUTRAL,
+            entities=[],
+            summary="Re-processed: content has changed.",
+            confidence=0.4,
+        )
+        second = await repo.upsert(email_id, second_result)
 
     assert second.id == first.id
     assert second.category == "other"
@@ -161,13 +165,36 @@ async def test_reprocessing_updates_in_place_and_bumps_updated_at(session_factor
     assert second.updated_at >= first.updated_at
 
 
+async def test_follow_up_fields_round_trip(session_factory) -> None:
+    email_id = await _create_user_and_email(session_factory)
+    result = _full_ai_result().model_copy(
+        update={
+            "follow_up_needed": True,
+            "follow_up_date": datetime(2026, 8, 15, 9, tzinfo=UTC),
+            "follow_up_reason": "Contact the airline after the cancellation.",
+        }
+    )
+
+    async with session_factory() as session:
+        repo = EmailAIUnderstandingRepository(session)
+        await repo.upsert(email_id, result)
+        fetched = await repo.get_by_email_id(email_id)
+
+    assert fetched is not None
+    assert fetched.follow_up_needed is True
+    assert fetched.follow_up_date == result.follow_up_date
+    assert fetched.follow_up_reason == result.follow_up_reason
+
+
 async def test_ai_understanding_is_deleted_when_parent_email_is_deleted(
     session_factory,
 ) -> None:
 
     email_id = await _create_user_and_email(session_factory)
-    repo = EmailAIUnderstandingRepository(session_factory())
-    await repo.upsert(email_id, _full_ai_result())
+
+    async with session_factory() as session:
+        repo = EmailAIUnderstandingRepository(session)
+        await repo.upsert(email_id, _full_ai_result())
 
     async with session_factory() as session:
         email = await session.get(EmailModel, email_id)
@@ -191,24 +218,25 @@ async def test_multiple_emails_have_independent_ai_understanding_rows(
 ) -> None:
     email_id_a = await _create_user_and_email(session_factory)
     email_id_b = await _create_user_and_email(session_factory)
-    repo = EmailAIUnderstandingRepository(session_factory())
 
-    await repo.upsert(email_id_a, _full_ai_result())
-    await repo.upsert(
-        email_id_b,
-        AIUnderstandingResult(
-            category=EmailCategory.FINANCE,
-            intent=EmailIntent.CONFIRMATION,
-            urgency=EmailUrgency.MEDIUM,
-            sentiment=EmailSentiment.POSITIVE,
-            entities=[],
-            summary="Payment confirmation.",
-            confidence=0.8,
-        ),
-    )
+    async with session_factory() as session:
+        repo = EmailAIUnderstandingRepository(session)
+        await repo.upsert(email_id_a, _full_ai_result())
+        await repo.upsert(
+            email_id_b,
+            AIUnderstandingResult(
+                category=EmailCategory.FINANCE,
+                intent=EmailIntent.CONFIRMATION,
+                urgency=EmailUrgency.MEDIUM,
+                sentiment=EmailSentiment.POSITIVE,
+                entities=[],
+                summary="Payment confirmation.",
+                confidence=0.8,
+            ),
+        )
 
-    result_a = await repo.get_by_email_id(email_id_a)
-    result_b = await repo.get_by_email_id(email_id_b)
+        result_a = await repo.get_by_email_id(email_id_a)
+        result_b = await repo.get_by_email_id(email_id_b)
 
     assert result_a.category == "travel"
     assert result_b.category == "finance"

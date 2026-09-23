@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -55,9 +56,14 @@ def session_factory(prepared_db: AsyncEngine) -> async_sessionmaker[AsyncSession
     return async_sessionmaker(bind=prepared_db, expire_on_commit=False)
 
 
-@pytest.fixture
-def repo(session_factory: async_sessionmaker[AsyncSession]) -> EmailChunkRepository:
-    return EmailChunkRepository(session_factory())
+@pytest_asyncio.fixture
+async def repo(session_factory: async_sessionmaker[AsyncSession]):
+    async with session_factory() as session:
+        try:
+            yield EmailChunkRepository(session)
+        finally:
+            await session.rollback()
+            await session.close()
 
 
 async def _create_user_thread_email(

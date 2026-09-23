@@ -1,6 +1,7 @@
+from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class EmailCategory(StrEnum):
@@ -56,3 +57,12 @@ class AIUnderstandingResult(BaseModel):
     entities: list[Entity] = Field(default_factory=list)
     summary: str = Field(min_length=1, max_length=1000)
     confidence: float = Field(ge=0.0, le=1.0)
+    follow_up_needed: bool = False
+    follow_up_date: datetime | None = None
+    follow_up_reason: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_follow_up_date(self) -> "AIUnderstandingResult":
+        if not self.follow_up_needed and self.follow_up_date is not None:
+            raise ValueError("follow_up_date must be null when follow_up_needed is false")
+        return self

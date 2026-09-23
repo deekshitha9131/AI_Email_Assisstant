@@ -4,6 +4,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.enums.draft_status import DraftStatus
+from app.presentation.api.v1.schemas.email import EmailDetail
 
 
 class DraftCreateRequest(BaseModel):
@@ -25,3 +26,13 @@ class DraftResponse(BaseModel):
     status: DraftStatus
     created_at: datetime
     updated_at: datetime
+
+
+class DraftReviewResponse(DraftResponse):
+    email: EmailDetail
+
+
+class DraftReviewListResponse(BaseModel):
+    items: list[DraftReviewResponse]
+    page: int
+    page_size: int

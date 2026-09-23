@@ -1,5 +1,15 @@
 import { apiClient } from "./client";
-import type { Draft, DraftCreateRequest, DraftUpdateRequest } from "@/types";
+import type {
+  Draft,
+  DraftCreateRequest,
+  DraftReviewListResponse,
+  DraftUpdateRequest,
+} from "@/types";
+
+export async function listAIDrafts(): Promise<DraftReviewListResponse> {
+  const response = await apiClient.get<DraftReviewListResponse>("/drafts");
+  return response.data;
+}
 
 export async function createDraft(payload: DraftCreateRequest): Promise<Draft> {
   const response = await apiClient.post<Draft>("/drafts", payload);

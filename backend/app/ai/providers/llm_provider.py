@@ -47,6 +47,8 @@ class LLMProvider:
             self._client = AsyncOpenAI(
                 api_key=self._settings.groq_api_key,
                 base_url=_GROQ_BASE_URL,
+                timeout=60.0,
+                max_retries=0,
             )
         return self._client
 

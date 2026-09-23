@@ -1,8 +1,12 @@
 import asyncio
+from collections.abc import Callable
 from functools import lru_cache
+from typing import TYPE_CHECKING, Any
 
 import structlog
-from sentence_transformers import SentenceTransformer
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 from app.core.constants import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL_NAME
 from app.domain.exceptions.ai import EmbeddingProviderError
@@ -11,8 +15,12 @@ logger = structlog.get_logger(__name__)
 
 
 @lru_cache(maxsize=1)
-def _load_model() -> SentenceTransformer:
+def _load_model() -> "SentenceTransformer":
     """Load the sentence-transformers model once and cache it for reuse.
+
+    Importing sentence-transformers at module import time is extremely expensive
+    because it eagerly loads the full Hugging Face model registry; we defer that
+    import until the embedding path is actually used.
 
     The model is downloaded on first use and cached locally by the
     sentence-transformers library (~/.cache/torch/sentence_transformers).
@@ -20,6 +28,8 @@ def _load_model() -> SentenceTransformer:
     """
     logger.info("embedding_model_loading", model=EMBEDDING_MODEL_NAME)
     try:
+        from sentence_transformers import SentenceTransformer
+
         model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     except Exception as exc:
         raise EmbeddingProviderError(
@@ -39,6 +49,9 @@ class EmbeddingService:
     The model is loaded once (lazily, on first embed call) and reused
     for all subsequent requests via a module-level cache.
     """
+
+    def __init__(self, model_loader: Callable[[], Any] | None = None) -> None:
+        self._model_loader = model_loader or _load_model
 
     def _validate_dimensions(self, embedding: list[float]) -> None:
         if len(embedding) != EMBEDDING_DIMENSIONS:
@@ -86,14 +99,12 @@ class EmbeddingService:
             self._validate_dimensions(embedding)
         return embeddings
 
-    @staticmethod
-    def _embed_text_sync(text: str) -> list[float]:
-        model = _load_model()
+    def _embed_text_sync(self, text: str) -> list[float]:
+        model = self._model_loader()
         vector = model.encode(text, normalize_embeddings=True)
         return vector.tolist()
 
-    @staticmethod
-    def _embed_texts_sync(texts: list[str]) -> list[list[float]]:
-        model = _load_model()
+    def _embed_texts_sync(self, texts: list[str]) -> list[list[float]]:
+        model = self._model_loader()
         vectors = model.encode(texts, normalize_embeddings=True)
         return [v.tolist() for v in vectors]

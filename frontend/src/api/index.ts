@@ -6,3 +6,5 @@ export * from "./drafts";
 export * from "./composeDrafts";
 export * from "./status";
 export * from "./gmail";
+export * from "./sent";
+export * from "./notifications";

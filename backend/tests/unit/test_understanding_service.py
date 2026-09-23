@@ -175,3 +175,48 @@ async def test_service_performs_no_database_operations() -> None:
     param_names = set(signature.parameters.keys()) - {"self"}
 
     assert param_names == {"preprocessor", "llm_provider"}
+
+
+def test_follow_up_required_with_date_is_valid() -> None:
+    result = _ai_result(
+        follow_up_needed=True,
+        follow_up_date=datetime(2026, 8, 15, 9, tzinfo=UTC),
+        follow_up_reason="Contact the airline after the cancellation.",
+    )
+
+    assert result.follow_up_needed is True
+    assert result.follow_up_date == datetime(2026, 8, 15, 9, tzinfo=UTC)
+    assert result.follow_up_reason == "Contact the airline after the cancellation."
+
+
+def test_follow_up_not_required_defaults_to_no_date() -> None:
+    result = _ai_result()
+
+    assert result.follow_up_needed is False
+    assert result.follow_up_date is None
+    assert result.follow_up_reason is None
+
+
+def test_follow_up_date_is_rejected_when_follow_up_is_not_needed() -> None:
+    with pytest.raises(ValueError, match="follow_up_date must be null"):
+        _ai_result(
+            follow_up_needed=False,
+            follow_up_date=datetime(2026, 8, 15, 9, tzinfo=UTC),
+        )
+
+
+def test_invalid_follow_up_date_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        AIUnderstandingResult.model_validate(
+            {
+                "category": "travel",
+                "intent": "cancellation",
+                "urgency": "high",
+                "sentiment": "negative",
+                "entities": [],
+                "summary": "Flight was cancelled.",
+                "confidence": 0.9,
+                "follow_up_needed": True,
+                "follow_up_date": "not-a-datetime",
+            }
+        )

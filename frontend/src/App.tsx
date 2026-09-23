@@ -8,6 +8,7 @@ import Dashboard from "@/pages/Dashboard";
 import EmailDetail from "@/pages/EmailDetail";
 import Inbox from "@/pages/Inbox";
 import Login from "@/pages/Login";
+import Sent from "@/pages/Sent";
 
 function App() {
   return (
@@ -57,6 +58,14 @@ function App() {
         element={
           <ProtectedRoute>
             <EmailDetail />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/sent"
+        element={
+          <ProtectedRoute>
+            <Sent />
           </ProtectedRoute>
         }
       />

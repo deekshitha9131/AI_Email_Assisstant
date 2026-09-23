@@ -85,7 +85,12 @@ class DraftRepository:
         return _to_entity(model) if model is not None else None
 
     async def list_by_user(
-        self, user_id: UUID, *, page: int = 1, page_size: int = 25
+        self,
+        user_id: UUID,
+        *,
+        page: int = 1,
+        page_size: int = 25,
+        status: DraftStatus | None = None,
     ) -> list[Draft]:
         if page < 1:
             raise ValueError(f"page must be >= 1, got {page}")
@@ -100,6 +105,8 @@ class DraftRepository:
             .limit(page_size)
             .offset((page - 1) * page_size)
         )
+        if status is not None:
+            stmt = stmt.where(DraftModel.status == status)
         result = await self._session.execute(stmt)
         return [_to_entity(model) for model in result.scalars().all()]
 
@@ -116,6 +123,26 @@ class DraftRepository:
     async def update_status(self, draft_id: UUID, status: DraftStatus) -> Draft:
         model = await self._get_model_or_raise(draft_id)
         model.status = status
+        await self._session.commit()
+        await self._session.refresh(model)
+        return _to_entity(model)
+
+    async def claim_for_approval(self, draft_id: UUID, user_id: UUID) -> Draft | None:
+        stmt = (
+            select(DraftModel)
+            .join(EmailModel, DraftModel.email_id == EmailModel.id)
+            .where(
+                DraftModel.id == draft_id,
+                EmailModel.user_id == user_id,
+                DraftModel.status == DraftStatus.GENERATED,
+            )
+            .with_for_update()
+        )
+        result = await self._session.execute(stmt)
+        model = result.scalar_one_or_none()
+        if model is None:
+            return None
+        model.status = DraftStatus.APPROVED
         await self._session.commit()
         await self._session.refresh(model)
         return _to_entity(model)

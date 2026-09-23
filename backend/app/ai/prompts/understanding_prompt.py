@@ -29,6 +29,13 @@ SYSTEM_PROMPT = (
     "is about.\n"
     "confidence: your confidence in this overall classification, as a "
     "number from 0.0 to 1.0.\n"
+    "follow_up_needed: true only when the email explicitly requires a "
+    "future action, response, or check-in; otherwise false.\n"
+    "follow_up_date: an ISO 8601 datetime for the requested follow-up "
+    "date when one is explicitly stated, otherwise null. It must be null "
+    "when follow_up_needed is false.\n"
+    "follow_up_reason: a concise explanation of why follow-up is needed, "
+    "otherwise null.\n"
 )
 
 

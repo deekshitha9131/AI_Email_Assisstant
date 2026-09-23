@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -61,9 +62,14 @@ def session_factory(prepared_db: AsyncEngine) -> async_sessionmaker[AsyncSession
     return async_sessionmaker(bind=prepared_db, expire_on_commit=False)
 
 
-@pytest.fixture
-def repo(session_factory: async_sessionmaker[AsyncSession]) -> EmailAIUnderstandingRepository:
-    return EmailAIUnderstandingRepository(session_factory())
+@pytest_asyncio.fixture
+async def repo(session_factory: async_sessionmaker[AsyncSession]):
+    async with session_factory() as session:
+        try:
+            yield EmailAIUnderstandingRepository(session)
+        finally:
+            await session.rollback()
+            await session.close()
 
 
 async def _create_email(session_factory: async_sessionmaker[AsyncSession]) -> uuid.UUID:

@@ -18,6 +18,7 @@ class OpenAPITags:
     THREADS: Final[str] = "Threads"
     AI_UNDERSTANDING: Final[str] = "AI Understanding"
     DRAFTS: Final[str] = "Drafts"
+    NOTIFICATIONS: Final[str] = "Notifications"
 
 
 OPENAPI_TAGS_METADATA: Final[list[dict[str, str]]] = [
@@ -48,6 +49,10 @@ OPENAPI_TAGS_METADATA: Final[list[dict[str, str]]] = [
     {
         "name": OpenAPITags.DRAFTS,
         "description": "AI-generated draft replies and the human-approval workflow.",
+    },
+    {
+        "name": OpenAPITags.NOTIFICATIONS,
+        "description": "Persistent in-app notifications for the authenticated user.",
     },
     ]
 

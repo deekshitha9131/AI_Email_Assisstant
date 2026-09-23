@@ -2,8 +2,10 @@ import asyncio
 import base64
 import json
 from collections.abc import Callable
+from email.utils import parsedate_to_datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from datetime import UTC, datetime
 from typing import Any, TypeVar, cast
 
 import structlog
@@ -30,6 +32,9 @@ T = TypeVar("T")
 _GMAIL_SERVICE_NAME = "gmail"
 _GMAIL_SERVICE_VERSION = "v1"
 _DEFAULT_MAX_RESULTS = 100
+_RATE_LIMIT_MAX_RETRIES = 3
+_RATE_LIMIT_INITIAL_DELAY_SECONDS = 1.0
+_RATE_LIMIT_MAX_DELAY_SECONDS = 30.0
 
 _AUTH_FAILURE_STATUSES = frozenset({401, 403})
 
@@ -48,6 +53,24 @@ def _google_error_reasons(error: HttpError) -> set[str]:
         if isinstance(item, dict)
         if item.get("reason")
     }
+
+
+def _rate_limit_delay_seconds(error: HttpError, retry_number: int) -> float:
+    retry_after = error.resp.get("retry-after") if error.resp is not None else None
+    if retry_after:
+        try:
+            delay = float(retry_after)
+        except (TypeError, ValueError):
+            try:
+                retry_at = parsedate_to_datetime(retry_after)
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=UTC)
+                delay = (retry_at - datetime.now(UTC)).total_seconds()
+            except (TypeError, ValueError, OverflowError):
+                delay = _RATE_LIMIT_INITIAL_DELAY_SECONDS * (2 ** (retry_number - 1))
+    else:
+        delay = _RATE_LIMIT_INITIAL_DELAY_SECONDS * (2 ** (retry_number - 1))
+    return min(max(delay, 0.0), _RATE_LIMIT_MAX_DELAY_SECONDS)
 
 
 class GmailClient:
@@ -123,50 +146,63 @@ class GmailClient:
         """Run a synchronous googleapiclient call off the event loop and
         translate its errors into this project's domain exceptions."""
         service = self._get_service()
-        try:
-            return await asyncio.to_thread(operation, service)
-        except HttpError as exc:
-            status = exc.resp.status if exc.resp is not None else None
-            reasons = _google_error_reasons(exc)
-            if "accessNotConfigured" in reasons:
-                raise GmailAPIError(
-                    "The Gmail API is not enabled for the configured Google Cloud project."
-                ) from exc
-            if reasons & {"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded"}:
-                raise GmailAPIError(
-                    "Gmail temporarily rate-limited this request. Please retry the sync."
-                ) from exc
-            if "insufficientPermissions" in reasons or "forbidden" in reasons:
-                raise GmailPermissionError(
-                    "The connected Google account does not grant the required Gmail scope. "
-                    "Reconnect Gmail and approve Gmail access."
-                ) from exc
-            if status in _AUTH_FAILURE_STATUSES:
-                logger.warning(
-                    "gmail_request_authentication_failed",
-                    status=status,
-                    reasons=sorted(reasons),
+        for attempt in range(_RATE_LIMIT_MAX_RETRIES + 1):
+            try:
+                return await asyncio.to_thread(operation, service)
+            except HttpError as exc:
+                status = exc.resp.status if exc.resp is not None else None
+                reasons = _google_error_reasons(exc)
+                is_rate_limited = status == 429 or bool(
+                    reasons & {"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded"}
                 )
+                if is_rate_limited and attempt < _RATE_LIMIT_MAX_RETRIES:
+                    delay = _rate_limit_delay_seconds(exc, attempt + 1)
+                    logger.warning(
+                        "gmail_request_rate_limited_retrying",
+                        attempt=attempt + 1,
+                        delay_seconds=delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                if "accessNotConfigured" in reasons:
+                    raise GmailAPIError(
+                        "The Gmail API is not enabled for the configured Google Cloud project."
+                    ) from exc
+                if reasons & {"rateLimitExceeded", "userRateLimitExceeded", "quotaExceeded"}:
+                    raise GmailAPIError(
+                        "Gmail temporarily rate-limited this request. Please retry the sync."
+                    ) from exc
+                if "insufficientPermissions" in reasons or "forbidden" in reasons:
+                    raise GmailPermissionError(
+                        "The connected Google account does not grant the required Gmail scope. "
+                        "Reconnect Gmail and approve Gmail access."
+                    ) from exc
+                if status in _AUTH_FAILURE_STATUSES:
+                    logger.warning(
+                        "gmail_request_authentication_failed",
+                        status=status,
+                        reasons=sorted(reasons),
+                    )
+                    raise GmailAuthenticationError(
+                        "Gmail rejected the request as unauthenticated or "
+                        "unauthorized — the stored OAuth tokens may be expired "
+                        "or revoked."
+                    ) from exc
+                if history_request and status == 404:
+                    raise GmailHistoryExpiredError(
+                        "Gmail no longer retains the history needed for incremental sync."
+                    ) from exc
+                raise GmailAPIError(f"Gmail API request failed with status {status}.") from exc
+            except GoogleAuthError as exc:
                 raise GmailAuthenticationError(
-                    "Gmail rejected the request as unauthenticated or "
-                    "unauthorized — the stored OAuth tokens may be expired "
-                    "or revoked."
+                    "Failed to authenticate with Gmail using the stored OAuth tokens."
                 ) from exc
-            if history_request and status == 404:
-                raise GmailHistoryExpiredError(
-                    "Gmail no longer retains the history needed for incremental sync."
+            except (GmailAPIError, GmailAuthenticationError, GmailHistoryExpiredError):
+                raise
+            except Exception as exc:
+                raise GmailAPIError(
+                    "An unexpected error occurred while communicating with the Gmail API."
                 ) from exc
-            raise GmailAPIError(f"Gmail API request failed with status {status}.") from exc
-        except GoogleAuthError as exc:
-            raise GmailAuthenticationError(
-                "Failed to authenticate with Gmail using the stored OAuth tokens."
-            ) from exc
-        except (GmailAPIError, GmailAuthenticationError, GmailHistoryExpiredError):
-            raise
-        except Exception as exc:
-            raise GmailAPIError(
-                "An unexpected error occurred while communicating with the Gmail API."
-            ) from exc
 
     async def get_profile(self) -> dict[str, Any]:
         """Return the connected Gmail account's profile."""

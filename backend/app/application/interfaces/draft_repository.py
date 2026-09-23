@@ -25,7 +25,12 @@ class IDraftRepository(Protocol):
         ...
 
     async def list_by_user(
-        self, user_id: UUID, *, page: int = 1, page_size: int = 25
+        self,
+        user_id: UUID,
+        *,
+        page: int = 1,
+        page_size: int = 25,
+        status: DraftStatus | None = None,
     ) -> list[Draft]:
         """List a user's drafts (across all their emails), paginated,
         newest first."""
@@ -39,6 +44,10 @@ class IDraftRepository(Protocol):
         (e.g. approving an already-sent draft) — that is a use-case
         rule for a later task's service layer, not a persistence
         concern."""
+        ...
+
+    async def claim_for_approval(self, draft_id: UUID, user_id: UUID) -> Draft | None:
+        """Atomically claim a generated, owned draft for approval/send."""
         ...
 
     async def get_by_email_id(self, email_id: UUID) -> Draft | None: ...

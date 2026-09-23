@@ -58,12 +58,12 @@ def session_factory(prepared_db: AsyncEngine) -> async_sessionmaker[AsyncSession
 
 @pytest.fixture
 async def repo(session_factory: async_sessionmaker[AsyncSession]):
-    session = session_factory()
-    try:
-        yield DraftRepository(session)
-    finally:
-        await session.close()
-
+    async with session_factory() as session:
+        try:
+            yield DraftRepository(session)
+        finally:
+            await session.rollback()
+            await session.close()
 
 async def _create_user_and_email(
     session_factory: async_sessionmaker[AsyncSession],

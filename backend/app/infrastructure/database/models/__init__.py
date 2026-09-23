@@ -4,6 +4,8 @@ from app.infrastructure.database.models.draft import DraftModel
 from app.infrastructure.database.models.email import EmailModel
 from app.infrastructure.database.models.email_ai_understanding import EmailAIUnderstandingModel
 from app.infrastructure.database.models.email_chunk import EmailChunkModel
+from app.infrastructure.database.models.follow_up import FollowUpModel
+from app.infrastructure.database.models.notification import NotificationModel
 from app.infrastructure.database.models.oauth_token import OAuthTokenModel
 from app.infrastructure.database.models.thread import ThreadModel
 from app.infrastructure.database.models.user import UserModel
@@ -17,5 +19,7 @@ __all__ = [
     "ComposeDraftModel",
     "EmailAIUnderstandingModel",
     "EmailChunkModel",
+    "FollowUpModel",
+    "NotificationModel",
     "DraftModel",
 ]

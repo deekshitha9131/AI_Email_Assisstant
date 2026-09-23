@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -16,6 +17,7 @@ from app.core.di_container import (
     get_current_user,
     get_email_ai_understanding_repository,
     get_email_service,
+    get_follow_up_service,
     get_understanding_service,
 )
 from app.domain.entities.email import Email
@@ -104,11 +106,26 @@ class FakeUnderstandingService:
 
 
 class FakeAIRepository:
-    def __init__(self) -> None:
+    def __init__(self, *, existing=None) -> None:
+        self.existing = existing
+        self.get_calls: list = []
         self.upsert_calls: list[tuple] = []
+
+    async def get_by_email_id(self, email_id):
+        self.get_calls.append(email_id)
+        return self.existing
 
     async def upsert(self, email_id, result):
         self.upsert_calls.append((email_id, result))
+        return None
+
+
+class FakeFollowUpService:
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    async def create_from_ai(self, user, email_id, *, follow_up_needed, due_at, reason):
+        self.calls.append((user, email_id, follow_up_needed, due_at, reason))
         return None
 
 
@@ -123,6 +140,7 @@ def _override(
     email_service,
     understanding_service,
     ai_repository,
+    follow_up_service=None,
     current_user=True,
 ):
     app_no_lifespan.dependency_overrides[get_email_service] = lambda: email_service
@@ -130,8 +148,17 @@ def _override(
     app_no_lifespan.dependency_overrides[get_email_ai_understanding_repository] = (
         lambda: ai_repository
     )
-    if current_user:
+    app_no_lifespan.dependency_overrides[get_follow_up_service] = (
+        lambda: follow_up_service or FakeFollowUpService()
+    )
+    if current_user is True:
         app_no_lifespan.dependency_overrides[get_current_user] = _fake_current_user
+    elif current_user is False:
+        app_no_lifespan.dependency_overrides.pop(get_current_user, None)
+    elif isinstance(current_user, User):
+        app_no_lifespan.dependency_overrides[get_current_user] = lambda: current_user
+    else:
+        app_no_lifespan.dependency_overrides[get_current_user] = current_user
 
 
 def test_analyze_email_returns_ai_understanding_for_own_email(
@@ -156,6 +183,122 @@ def test_analyze_email_returns_ai_understanding_for_own_email(
     assert body["summary"] == "Distinctive summary text."
     assert body["category"] == "travel"
     assert body["confidence"] == 0.94
+
+
+def test_analyze_email_creates_follow_up_when_ai_requires_one(
+    app_no_lifespan: FastAPI, unit_client: TestClient, user: User
+) -> None:
+    email = _email(user_id=user.id)
+    result = _ai_result(
+        follow_up_needed=True,
+        follow_up_date=datetime(2026, 9, 25, 10, tzinfo=UTC),
+        follow_up_reason="Check whether the cancellation was resolved.",
+    )
+    follow_up_service = FakeFollowUpService()
+    _override(
+        app_no_lifespan,
+        email_service=FakeEmailService(email=email),
+        understanding_service=FakeUnderstandingService(result=result),
+        ai_repository=FakeAIRepository(),
+        follow_up_service=follow_up_service,
+        current_user=user,
+    )
+
+    response = unit_client.post(f"/api/v1/emails/{email.id}/analyze")
+
+    assert response.status_code == 200
+    assert follow_up_service.calls == [
+        (
+            user,
+            email.id,
+            True,
+            datetime(2026, 9, 25, 10, tzinfo=UTC),
+            "Check whether the cancellation was resolved.",
+        )
+    ]
+
+
+def test_analyze_email_skips_follow_up_when_ai_does_not_require_one(
+    app_no_lifespan: FastAPI, unit_client: TestClient, user: User
+) -> None:
+    email = _email(user_id=user.id)
+    follow_up_service = FakeFollowUpService()
+    _override(
+        app_no_lifespan,
+        email_service=FakeEmailService(email=email),
+        understanding_service=FakeUnderstandingService(result=_ai_result()),
+        ai_repository=FakeAIRepository(),
+        follow_up_service=follow_up_service,
+        current_user=user,
+    )
+
+    response = unit_client.post(f"/api/v1/emails/{email.id}/analyze")
+
+    assert response.status_code == 200
+    assert follow_up_service.calls == [
+        (user, email.id, False, None, None)
+    ]
+
+
+def test_analyze_email_skips_follow_up_when_required_date_is_missing(
+    app_no_lifespan: FastAPI, unit_client: TestClient, user: User
+) -> None:
+    email = _email(user_id=user.id)
+    follow_up_service = FakeFollowUpService()
+    _override(
+        app_no_lifespan,
+        email_service=FakeEmailService(email=email),
+        understanding_service=FakeUnderstandingService(
+            result=_ai_result(follow_up_needed=True, follow_up_date=None)
+        ),
+        ai_repository=FakeAIRepository(),
+        follow_up_service=follow_up_service,
+        current_user=user,
+    )
+
+    response = unit_client.post(f"/api/v1/emails/{email.id}/analyze")
+
+    assert response.status_code == 200
+    assert follow_up_service.calls == [(user, email.id, True, None, None)]
+
+
+def test_repeated_analysis_uses_existing_follow_up_safely(
+    app_no_lifespan: FastAPI, unit_client: TestClient, user: User
+) -> None:
+    email = _email(user_id=user.id)
+    stored = SimpleNamespace(
+        category="travel",
+        intent="cancellation",
+        urgency="high",
+        sentiment="negative",
+        entities=[],
+        summary="Flight booking was cancelled.",
+        confidence=0.94,
+        follow_up_needed=True,
+        follow_up_date=datetime(2026, 9, 25, 10, tzinfo=UTC),
+        follow_up_reason="Check whether the cancellation was resolved.",
+    )
+    follow_up_service = FakeFollowUpService()
+    _override(
+        app_no_lifespan,
+        email_service=FakeEmailService(email=email),
+        understanding_service=FakeUnderstandingService(),
+        ai_repository=FakeAIRepository(existing=stored),
+        follow_up_service=follow_up_service,
+    )
+
+    response = unit_client.post(f"/api/v1/emails/{email.id}/analyze")
+
+    assert response.status_code == 200
+    assert follow_up_service.calls == [
+        (
+            user,
+            email.id,
+            True,
+            datetime(2026, 9, 25, 10, tzinfo=UTC),
+            "Check whether the cancellation was resolved.",
+        )
+    ]
 
 
 def test_analyze_email_requires_authentication(

@@ -181,7 +181,7 @@ class EmailRepository:
             raise ValueError(f"page_size must be >= 1, got {page_size}")
 
         stmt = _apply_filters(
-            select(EmailModel),
+            select(EmailModel).options(selectinload(EmailModel.attachments)),
             user_id=user_id,
             is_read=is_read,
             is_starred=is_starred,
@@ -290,7 +290,14 @@ class EmailRepository:
                 f"An email with gmail_message_id {gmail_message_id!r} already "
                 "exists for this user."
             ) from exc
-        return _to_entity(model)
+        stmt = (
+            select(EmailModel)
+            .options(selectinload(EmailModel.attachments))
+            .where(EmailModel.id == model.id)
+        )
+        result = await self._session.execute(stmt)
+        saved_model = result.scalar_one()
+        return _to_entity(saved_model)
 
     async def update(
         self, email_id: UUID, *, is_read: bool | None = None, is_starred: bool | None = None
@@ -302,7 +309,14 @@ class EmailRepository:
             model.is_starred = is_starred
         await self._session.commit()
         await self._session.refresh(model)
-        return _to_entity(model)
+        stmt = (
+            select(EmailModel)
+            .options(selectinload(EmailModel.attachments))
+            .where(EmailModel.id == model.id)
+        )
+        result = await self._session.execute(stmt)
+        refreshed_model = result.scalar_one()
+        return _to_entity(refreshed_model)
 
     async def delete(self, email_id: UUID) -> None:
         model = await self._get_model_or_raise(email_id)

@@ -12,8 +12,12 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
     )
 
 
-async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
+async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession | None, None]:
 
-    session_factory = request.app.state.db_session_factory
+    session_factory = getattr(request.app.state, "db_session_factory", None)
+    if session_factory is None:
+        yield None
+        return
+
     async with session_factory() as session:
         yield session

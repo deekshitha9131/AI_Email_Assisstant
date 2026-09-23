@@ -1,10 +1,13 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+import asyncio
 from typing import Any, TypeVar
 
 import structlog
 
 from app.application.dto.gmail import (
+    GmailSentMessage,
+    GmailSentMessages,
     GmailIncrementalSyncSummary,
     GmailSendResult,
     GmailSyncSummary,
@@ -18,6 +21,7 @@ from app.domain.exceptions.gmail import (
     GmailAuthenticationError,
     GmailHistoryExpiredError,
     GmailNotConnectedError,
+    GmailSyncInProgressError,
     GmailSyncRequiredError,
 )
 from app.infrastructure.database.repositories.email_repository import EmailRepository
@@ -29,6 +33,8 @@ from app.infrastructure.gmail.parser import EmailParser
 logger = structlog.get_logger(__name__)
 
 _RELEVANT_HISTORY_KEYS = ("messagesAdded", "labelsAdded", "labelsRemoved")
+_INITIAL_SYNC_MESSAGE_LIMIT = 10
+_INCREMENTAL_SYNC_LOCKS: dict[Any, asyncio.Lock] = {}
 T = TypeVar("T")
 
 
@@ -252,24 +258,77 @@ class GmailService:
         return ordered_ids
 
     async def sync_incremental(self, user: User) -> GmailIncrementalSyncSummary:
+        lock = _INCREMENTAL_SYNC_LOCKS.setdefault(user.id, asyncio.Lock())
+        if lock.locked():
+            raise GmailSyncInProgressError(
+                "An incremental Gmail sync is already running for this user."
+            )
+        await lock.acquire()
+
+        try:
+            return await self._sync_incremental_locked(user)
+        finally:
+            lock.release()
+            if not lock.locked() and _INCREMENTAL_SYNC_LOCKS.get(user.id) is lock:
+                _INCREMENTAL_SYNC_LOCKS.pop(user.id, None)
+
+    async def _sync_incremental_locked(self, user: User) -> GmailIncrementalSyncSummary:
         gmail_client = await self._get_connected_client(user)
 
         stored_history_id = await self._user_repository.get_gmail_history_id(user.id)
         if stored_history_id is None:
-            logger.info("gmail_incremental_sync_requires_initial_sync", user_id=str(user.id))
-            full_sync = await self.sync_mailbox(user)
-            latest_history_id = await self._user_repository.get_gmail_history_id(user.id)
-            if latest_history_id is None:
-                raise GmailSyncRequiredError(
-                    "Gmail did not return a history cursor after the initial sync."
+            logger.info(
+                "gmail_incremental_bootstrap_started",
+                user_id=str(user.id),
+                message_limit=_INITIAL_SYNC_MESSAGE_LIMIT,
+            )
+            threads_updated: set[str] = set()
+            emails_synced = 0
+            emails_skipped = 0
+            attachments_found = 0
+
+            list_response, gmail_client = await self._call_with_auth_retry(
+                user,
+                gmail_client,
+                lambda client: client.list_messages(
+                    label_ids=["INBOX"],
+                    max_results=_INITIAL_SYNC_MESSAGE_LIMIT,
+                ),
+            )
+            for ref in (list_response.get("messages") or [])[:_INITIAL_SYNC_MESSAGE_LIMIT]:
+                message_id = ref.get("id") if isinstance(ref, dict) else None
+                if not message_id:
+                    emails_skipped += 1
+                    continue
+                outcome, gmail_client = await self._fetch_parse_and_store(
+                    gmail_client, user, message_id
                 )
+                if outcome.skipped:
+                    emails_skipped += 1
+                else:
+                    emails_synced += 1
+                    attachments_found += outcome.attachments_count
+                    if outcome.thread_id is not None:
+                        threads_updated.add(outcome.thread_id)
+
+            profile, gmail_client = await self._call_with_auth_retry(
+                user,
+                gmail_client,
+                lambda client: client.get_profile(),
+            )
+            latest_history_id = profile.get("historyId")
+            if not latest_history_id:
+                raise GmailSyncRequiredError(
+                    "Gmail did not return a history cursor after the bootstrap sync."
+                )
+            await self._user_repository.update_gmail_history_id(user.id, str(latest_history_id))
             return GmailIncrementalSyncSummary(
                 success=True,
-                emails_synced=full_sync.emails_synced,
-                threads_updated=full_sync.threads_synced,
-                attachments_found=full_sync.attachments_found,
-                emails_skipped=full_sync.emails_skipped,
-                history_id=latest_history_id,
+                emails_synced=emails_synced,
+                threads_updated=len(threads_updated),
+                attachments_found=attachments_found,
+                emails_skipped=emails_skipped,
+                history_id=str(latest_history_id),
             )
 
         threads_updated: set[str] = set()
@@ -279,6 +338,7 @@ class GmailService:
         messages_processed = 0
         latest_history_id = stored_history_id
         page_token: str | None = None
+        seen_message_ids: set[str] = set()
 
         try:
             while True:
@@ -298,6 +358,9 @@ class GmailService:
                 changed_message_ids = self._extract_changed_message_ids(history_records)
 
                 for message_id in changed_message_ids:
+                    if message_id in seen_message_ids:
+                        continue
+                    seen_message_ids.add(message_id)
                     outcome, gmail_client = await self._fetch_parse_and_store(
                         gmail_client, user, message_id
                     )
@@ -399,3 +462,52 @@ class GmailService:
             gmail_message_id=gmail_message_id,
             gmail_thread_id=gmail_thread_id,
         )
+
+    async def list_sent_messages(
+        self, user: User, *, page_token: str | None = None, max_results: int = 25
+    ) -> GmailSentMessages:
+        """Read one page of sent messages from the user's Gmail mailbox."""
+        gmail_client = await self._get_connected_client(user)
+        response, gmail_client = await self._call_with_auth_retry(
+            user,
+            gmail_client,
+            lambda client: client.list_messages(
+                label_ids=["SENT"], page_token=page_token, max_results=max_results
+            ),
+        )
+
+        items: list[GmailSentMessage] = []
+        for message_reference in response.get("messages") or []:
+            message_id = message_reference.get("id") if isinstance(message_reference, dict) else None
+            if not message_id:
+                continue
+            raw_message, gmail_client = await self._call_with_auth_retry(
+                user, gmail_client, lambda client, id=message_id: client.get_message(id)
+            )
+            try:
+                parsed = self._parser.parse_message(raw_message)
+            except Exception as exc:
+                logger.warning(
+                    "gmail_sent_message_skipped_unparseable",
+                    user_id=str(user.id),
+                    message_id=message_id,
+                    error=str(exc),
+                )
+                continue
+            items.append(
+                GmailSentMessage(
+                    gmail_message_id=parsed.gmail_message_id,
+                    gmail_thread_id=parsed.gmail_thread_id,
+                    sender=parsed.sender,
+                    recipients=parsed.recipients,
+                    cc=parsed.cc,
+                    bcc=parsed.bcc,
+                    subject=parsed.subject,
+                    snippet=parsed.snippet,
+                    body_text=parsed.body_text,
+                    body_html=parsed.body_html,
+                    sent_at=parsed.internal_date,
+                )
+            )
+
+        return GmailSentMessages(items=items, next_page_token=response.get("nextPageToken"))

@@ -8,7 +8,7 @@ the same philosophy test_oauth_client.py uses for the OAuth handshake
 """
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import httplib2
@@ -236,6 +236,47 @@ async def test_get_profile_raises_api_error_on_rate_limit(
     client = _client(monkeypatch)
     with pytest.raises(GmailAPIError, match="rate-limited"):
         await client.get_profile()
+
+
+@patch("app.infrastructure.gmail.client.asyncio.sleep", new_callable=AsyncMock)
+@patch("app.infrastructure.gmail.client.build")
+async def test_get_profile_retries_rate_limit_with_exponential_backoff(
+    mock_build: MagicMock, mock_sleep: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_service = MagicMock()
+    execute = mock_service.users.return_value.getProfile.return_value.execute
+    execute.side_effect = [_http_error(429), _http_error(429), {"historyId": "200"}]
+    mock_build.return_value = mock_service
+
+    client = _client(monkeypatch)
+    result = await client.get_profile()
+
+    assert result["historyId"] == "200"
+    assert mock_sleep.await_args_list[0].args == (1.0,)
+    assert mock_sleep.await_args_list[1].args == (2.0,)
+    assert execute.call_count == 3
+
+
+@patch("app.infrastructure.gmail.client.asyncio.sleep", new_callable=AsyncMock)
+@patch("app.infrastructure.gmail.client.build")
+async def test_get_profile_honors_retry_after(
+    mock_build: MagicMock, mock_sleep: AsyncMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mock_service = MagicMock()
+    execute = mock_service.users.return_value.getProfile.return_value.execute
+    execute.side_effect = [
+        HttpError(
+            httplib2.Response({"status": "429", "retry-after": "7"}),
+            b'{"error":{"errors":[{"reason":"rateLimitExceeded"}]}}',
+        ),
+        {"historyId": "200"},
+    ]
+    mock_build.return_value = mock_service
+
+    client = _client(monkeypatch)
+    await client.get_profile()
+
+    mock_sleep.assert_awaited_once_with(7.0)
 
 
 @patch("app.infrastructure.gmail.client.build")

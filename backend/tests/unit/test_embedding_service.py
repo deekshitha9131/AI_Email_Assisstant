@@ -1,26 +1,50 @@
 """Tests for the local sentence-transformers embedding service.
 
-Verifies that the EmbeddingService produces 384-dimensional vectors
-using the local all-MiniLM-L6-v2 model — no OpenAI API, no API key,
-no HTTP requests to external services.
+These tests validate the embedding service contract using a deterministic,
+lightweight fake model so pytest remains offline and deterministic while the
+production implementation continues to use SentenceTransformer lazily.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from app.ai.rag.embedding import EmbeddingService, _load_model
+from app.ai.rag.embedding import EmbeddingService
 from app.core.constants import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL_NAME
 from app.domain.exceptions.ai import EmbeddingProviderError
 
 
+class FakeEmbeddingVector(list[float]):
+    def tolist(self) -> list[float]:
+        return list(self)
+
+
+class FakeEmbeddingModel:
+    def __init__(self) -> None:
+        self.calls: list[str | list[str]] = []
+
+    def encode(self, value: str | list[str], normalize_embeddings: bool = True) -> FakeEmbeddingVector | list[FakeEmbeddingVector]:
+        self.calls.append(value)
+
+        def vector_for(text: str) -> FakeEmbeddingVector:
+            seed = sum((index + 1) * ord(char) for index, char in enumerate(text))
+            return FakeEmbeddingVector(
+                [((seed + i * 13) % 997) / 997.0 for i in range(EMBEDDING_DIMENSIONS)]
+            )
+
+        if isinstance(value, str):
+            return vector_for(value)
+        return [vector_for(text) for text in value]
+
+
 @pytest.fixture
 def service() -> EmbeddingService:
-    return EmbeddingService()
+    model = FakeEmbeddingModel()
+    return EmbeddingService(model_loader=lambda: model)
 
 
 async def test_embed_text_returns_correct_dimension(service: EmbeddingService) -> None:
-    """The local model must return exactly 384-dimensional vectors."""
+    """The service must return exactly 384-dimensional vectors."""
     result = await service.embed_text("hello world")
     assert len(result) == EMBEDDING_DIMENSIONS
     assert len(result) == 384
@@ -47,12 +71,11 @@ async def test_embed_texts_with_empty_list_returns_empty(service: EmbeddingServi
 
 
 async def test_same_input_produces_compatible_vectors(service: EmbeddingService) -> None:
-    """Same input text should produce vectors of the same dimension."""
+    """Same input text should produce the same dimension and consistent values."""
     v1 = await service.embed_text("consistent input")
     v2 = await service.embed_text("consistent input")
 
     assert len(v1) == len(v2) == EMBEDDING_DIMENSIONS
-    # Vectors should be numerically identical for deterministic model
     for a, b in zip(v1, v2, strict=True):
         assert abs(a - b) < 1e-6
 
@@ -64,22 +87,16 @@ async def test_different_inputs_produce_different_vectors(service: EmbeddingServ
     assert v1 != v2
 
 
-async def test_model_loads_successfully() -> None:
-    """The all-MiniLM-L6-v2 model should load without error."""
-    model = _load_model()
-    assert model is not None
-
-
-async def test_model_is_cached() -> None:
-    """Model loading should be memoized — same instance returned."""
-    m1 = _load_model()
-    m2 = _load_model()
-    assert m1 is m2
+async def test_embedding_service_accepts_injected_model_loader() -> None:
+    model = FakeEmbeddingModel()
+    service = EmbeddingService(model_loader=lambda: model)
+    result = await service.embed_text("service injection")
+    assert len(result) == EMBEDDING_DIMENSIONS
+    assert model.calls == ["service injection"]
 
 
 async def test_no_openai_api_key_required(service: EmbeddingService) -> None:
     """EmbeddingService must work without any OPENAI_API_KEY."""
-    # If this call succeeds, no OpenAI key was needed
     result = await service.embed_text("no api key needed")
     assert len(result) == EMBEDDING_DIMENSIONS
 
@@ -87,6 +104,7 @@ async def test_no_openai_api_key_required(service: EmbeddingService) -> None:
 async def test_no_openai_import_in_embedding_module() -> None:
     """Verify the embedding module does not import openai."""
     import app.ai.rag.embedding as mod
+
     source_file = mod.__file__
     assert source_file is not None
     with open(source_file) as f:

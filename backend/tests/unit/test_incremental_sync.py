@@ -5,6 +5,7 @@ network boundary (GmailClient) is faked, EmailParser runs for real
 against hand-built Gmail-shaped fixtures.
 """
 
+import asyncio
 import base64
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -16,7 +17,7 @@ from app.core.config import Settings
 from app.domain.entities.oauth_token import OAuthToken
 from app.domain.entities.user import User
 from app.domain.enums.user_status import UserStatus
-from app.domain.exceptions.gmail import GmailAPIError
+from app.domain.exceptions.gmail import GmailAPIError, GmailSyncInProgressError
 
 BASE_ENV = {
     "APP_ENV": "development",
@@ -88,9 +89,16 @@ class FakeGmailClient:
     """Stands in for GmailClient — list_history/get_message return
     fixtures the test controls directly."""
 
-    def __init__(self, *, history_pages: list[dict], messages_by_id: dict[str, dict]) -> None:
+    def __init__(
+        self,
+        *,
+        history_pages: list[dict],
+        messages_by_id: dict[str, dict],
+        initial_messages: list[dict] | None = None,
+    ) -> None:
         self._history_pages = history_pages
         self._messages_by_id = messages_by_id
+        self._initial_messages = initial_messages or []
         self._page_index = 0
         self.list_history_calls: list[tuple[str, str | None]] = []
         self.raise_on_list_history: Exception | None = None
@@ -109,7 +117,7 @@ class FakeGmailClient:
 
     async def list_messages(self, *, label_ids=None, page_token=None, max_results=100):
         self.list_messages_calls.append(page_token)
-        return {"messages": []}
+        return {"messages": self._initial_messages}
 
     async def get_profile(self):
         return {"historyId": "200"}
@@ -224,7 +232,14 @@ def _make_service(
 
 async def test_sync_incremental_falls_back_to_initial_sync(monkeypatch: pytest.MonkeyPatch) -> None:
     user = _user()
-    gmail_client = FakeGmailClient(history_pages=[], messages_by_id={})
+    initial_messages = [{"id": f"m{index}", "threadId": f"t{index}"} for index in range(11)]
+    messages_by_id = {
+        message["id"]: _raw_message(message["id"], message["threadId"])
+        for message in initial_messages
+    }
+    gmail_client = FakeGmailClient(
+        history_pages=[], messages_by_id=messages_by_id, initial_messages=initial_messages
+    )
     service, user_repo, _ = _make_service(
         monkeypatch,
         gmail_client=gmail_client,
@@ -235,6 +250,7 @@ async def test_sync_incremental_falls_back_to_initial_sync(monkeypatch: pytest.M
     summary = await service.sync_incremental(user)
 
     assert summary.success is True
+    assert summary.emails_synced == 10
     assert summary.history_id == "200"
     assert gmail_client.list_messages_calls == [None]
     assert user_repo.update_history_id_calls == ["200"]
@@ -270,6 +286,82 @@ async def test_sync_incremental_success(monkeypatch: pytest.MonkeyPatch) -> None
     assert email_repo.upsert_calls == 2
     assert user_repo.update_history_id_calls == ["200"]
     assert gmail_client.list_history_calls == [("100", None)]
+
+
+async def test_sync_incremental_rejects_concurrent_run_for_same_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _user()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingGmailClient(FakeGmailClient):
+        async def list_history(self, *, start_history_id: str, page_token: str | None = None):
+            started.set()
+            await release.wait()
+            return {"history": [], "historyId": "200"}
+
+    gmail_client = BlockingGmailClient(history_pages=[], messages_by_id={})
+    service, _, _ = _make_service(
+        monkeypatch,
+        gmail_client=gmail_client,
+        oauth_token=_oauth_token(user.id),
+        gmail_history_id="100",
+    )
+
+    first_run = asyncio.create_task(service.sync_incremental(user))
+    await started.wait()
+
+    with pytest.raises(GmailSyncInProgressError):
+        await service.sync_incremental(user)
+
+    release.set()
+    summary = await first_run
+    assert summary.history_id == "200"
+
+
+async def test_sync_incremental_allows_different_users_to_run_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    users = [_user(), _user()]
+    started = [asyncio.Event(), asyncio.Event()]
+    release = [asyncio.Event(), asyncio.Event()]
+
+    def blocking_client(index: int) -> FakeGmailClient:
+        class BlockingGmailClient(FakeGmailClient):
+            async def list_history(
+                self, *, start_history_id: str, page_token: str | None = None
+            ):
+                started[index].set()
+                await release[index].wait()
+                return {"history": [], "historyId": str(200 + index)}
+
+        return BlockingGmailClient(history_pages=[], messages_by_id={})
+
+    clients = {user.id: blocking_client(index) for index, user in enumerate(users)}
+    services = []
+    for user in users:
+        service, _, _ = _make_service(
+            monkeypatch,
+            gmail_client=clients[user.id],
+            oauth_token=_oauth_token(user.id),
+            gmail_history_id="100",
+        )
+        services.append(service)
+    monkeypatch.setattr(
+        "app.application.services.gmail_service.GmailClient",
+        lambda *, oauth_token, settings: clients[oauth_token.user_id],
+    )
+
+    first_run = asyncio.create_task(services[0].sync_incremental(users[0]))
+    second_run = asyncio.create_task(services[1].sync_incremental(users[1]))
+    await asyncio.gather(*(event.wait() for event in started))
+
+    release[0].set()
+    release[1].set()
+    summaries = await asyncio.gather(first_run, second_run)
+
+    assert {summary.history_id for summary in summaries} == {"200", "201"}
 
 
 async def test_sync_incremental_with_no_changes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -424,3 +516,33 @@ async def test_sync_incremental_follows_pagination(monkeypatch: pytest.MonkeyPat
     assert summary.history_id == "200"
     assert gmail_client.list_history_calls == [("100", None), ("100", "hist-page-2")]
     assert email_repo.upsert_calls == 2
+
+
+async def test_sync_incremental_deduplicates_message_ids_across_history_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = _user()
+    messages_by_id = {"m1": _raw_message("m1", "t1")}
+    history_pages = [
+        {
+            "history": [{"messagesAdded": [{"message": {"id": "m1", "threadId": "t1"}}]}],
+            "historyId": "150",
+            "nextPageToken": "hist-page-2",
+        },
+        {
+            "history": [{"labelsAdded": [{"message": {"id": "m1", "threadId": "t1"}}]}],
+            "historyId": "200",
+        },
+    ]
+    gmail_client = FakeGmailClient(history_pages=history_pages, messages_by_id=messages_by_id)
+    service, _, email_repo = _make_service(
+        monkeypatch,
+        gmail_client=gmail_client,
+        oauth_token=_oauth_token(user.id),
+        gmail_history_id="100",
+    )
+
+    summary = await service.sync_incremental(user)
+
+    assert summary.emails_synced == 1
+    assert email_repo.upsert_calls == 1

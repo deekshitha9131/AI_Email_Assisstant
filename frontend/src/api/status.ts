@@ -1,9 +1,19 @@
 import { apiClient } from "./client";
 
+export type AutomationStatus = "ok" | "degraded" | "error" | "unknown";
+
+export interface AutomationStatusSnapshot {
+  status: AutomationStatus;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  last_error: string | null;
+}
+
 export interface ServiceStatus {
   gmail: "connected" | "disconnected" | "expired" | "error";
   ai: AIStatus;
   draft: "ready" | "not-ready" | "error";
+  automation: AutomationStatusSnapshot;
   user: {
     id: string;
     email: string;
