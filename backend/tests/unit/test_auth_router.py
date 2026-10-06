@@ -13,8 +13,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app.core.config import Settings
 from app.core.constants import OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME
-from app.core.di_container import get_auth_service, get_current_user
+from app.core.di_container import get_auth_service, get_current_user, get_settings_dependency
 from app.domain.entities.user import User
 from app.domain.enums.user_status import UserStatus
 from app.domain.exceptions.auth import InvalidOAuthStateError, SessionNotFoundError
@@ -86,6 +87,26 @@ def test_login_redirects_to_google_and_sets_state_cookie(
     assert "accounts.google.com" in response.headers["location"]
     assert response.cookies.get(OAUTH_STATE_COOKIE_NAME) == "fixed-test-state"
     assert fake_auth_service.login_calls == 1
+
+
+def test_production_login_state_cookie_is_secure_and_cross_site_get_compatible(
+    app_no_lifespan: FastAPI, unit_client: TestClient, fake_auth_service: FakeAuthService
+) -> None:
+    app_no_lifespan.dependency_overrides[get_settings_dependency] = lambda: Settings(
+        _env_file=None,
+        APP_ENV="production",
+        APP_SECRET_KEY="unit-test-secret",
+        DATABASE_URL="postgresql://localhost/test",
+    )
+
+    response = unit_client.get("/api/v1/auth/google/login", follow_redirects=False)
+
+    assert response.status_code == 302
+    cookie = response.headers["set-cookie"].lower()
+    assert "secure" in cookie
+    assert "httponly" in cookie
+    assert "samesite=lax" in cookie
+    assert "path=/" in cookie
 
 
 def test_callback_with_valid_state_sets_session_cookie_and_redirects(
