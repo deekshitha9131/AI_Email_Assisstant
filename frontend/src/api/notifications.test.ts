@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { Notification } from "@/types";
 import { apiClient } from "./client";
 import {
   getUnreadNotificationCount,
@@ -16,7 +17,7 @@ vi.mock("./client", () => ({
 
 describe("notification API", () => {
   it("lists notifications and reads the unread count", async () => {
-    const notifications = [];
+    const notifications: Notification[] = [];
     vi.mocked(apiClient.get)
       .mockResolvedValueOnce({ data: notifications } as never)
       .mockResolvedValueOnce({ data: { count: 2 } } as never);
