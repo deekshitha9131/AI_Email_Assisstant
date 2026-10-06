@@ -25,6 +25,7 @@ dependencies = [
     "crewai>=0.51,<1.0",
     "openai>=1.40,<2.0",
     "sentence-transformers>=2.7,<4.0",
+    "torch>=2.2",
     "google-auth>=2.32,<3.0",
     "google-auth-oauthlib>=1.2,<2.0",
     "google-api-python-client>=2.140,<3.0",
@@ -53,6 +54,14 @@ dev = [
 [build-system]
 requires = ["setuptools>=69.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.setuptools.packages.find]
 where = ["."]
