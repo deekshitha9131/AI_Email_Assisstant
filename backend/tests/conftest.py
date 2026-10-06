@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Generator
 
+import httpx
 import pytest
 import redis.asyncio as redis
 from fastapi import FastAPI
@@ -9,40 +10,51 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.config import Settings, get_settings
-from app.core.constants import EMBEDDING_DIMENSIONS
 from app.infrastructure.database.engine import create_db_engine, dispose_engine
 from app.main import create_app
 
 
-class FakeEmbeddingVector(list[float]):
-    def tolist(self) -> list[float]:
-        return list(self)
-
-
-class FakeEmbeddingModel:
+class FakeHuggingFaceInference:
     def __init__(self) -> None:
-        self.calls: list[str | list[str]] = []
+        self.calls: list[dict[str, object]] = []
 
-    def encode(self, value: str | list[str], normalize_embeddings: bool = True) -> FakeEmbeddingVector | list[FakeEmbeddingVector]:
-        self.calls.append(value)
+    async def handle(self, request: httpx.Request) -> httpx.Response:
+        import json
 
-        def vector_for(text: str) -> FakeEmbeddingVector:
-            seed = sum((index + 1) * ord(char) for index, char in enumerate(text))
-            return FakeEmbeddingVector(
-                [((seed + i * 13) % 997) / 997.0 for i in range(EMBEDDING_DIMENSIONS)]
-            )
+        body = json.loads(request.content)
+        self.calls.append(
+            {
+                "url": str(request.url),
+                "authorization": request.headers.get("Authorization"),
+                "inputs": body["inputs"],
+                "normalize": body["parameters"]["normalize"],
+            }
+        )
+        vectors = [
+            [float((index + len(text)) % 17 + 1) for index in range(384)]
+            for text in body["inputs"]
+        ]
+        return httpx.Response(200, json=vectors)
 
-        if isinstance(value, str):
-            return vector_for(value)
-        return [vector_for(text) for text in value]
+    def create_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=httpx.MockTransport(self.handle))
 
 
 @pytest.fixture(autouse=True)
-def fake_embedding_model(monkeypatch: pytest.MonkeyPatch) -> FakeEmbeddingModel:
-    """Keep all tests deterministic and offline by replacing the real SentenceTransformer loader."""
-    model = FakeEmbeddingModel()
-    monkeypatch.setattr("app.ai.rag.embedding._load_model", lambda: model)
-    return model
+def fake_huggingface_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> FakeHuggingFaceInference:
+    """Keep embedding calls deterministic and offline in tests."""
+    from app.ai.rag import embedding
+
+    fake_provider = FakeHuggingFaceInference()
+    monkeypatch.setattr(
+        embedding,
+        "get_settings",
+        lambda: Settings.model_construct(hf_token="test-hf-token"),
+    )
+    monkeypatch.setattr(embedding, "_create_http_client", fake_provider.create_client)
+    return fake_provider
 
 
 @pytest.fixture(autouse=True)

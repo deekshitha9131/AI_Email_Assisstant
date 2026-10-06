@@ -80,8 +80,7 @@ class Settings(BaseSettings):
     llm_critique_model: str = Field(default="openai/gpt-oss-20b", alias="LLM_CRITIQUE_MODEL")
 
     # --- Embeddings ---
-    # Embeddings use a local sentence-transformers model (all-MiniLM-L6-v2).
-    # No external API key is required.
+    hf_token: str = Field(default="", alias="HF_TOKEN")
 
     # --- Rate limiting ---
     rate_limit_per_minute: int = Field(default=60, alias="RATE_LIMIT_PER_MINUTE")

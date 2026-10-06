@@ -33,7 +33,6 @@ COPY pyproject.toml ./
 FROM base AS development
 
 RUN pip install --upgrade pip \
-    && pip install --index-url https://download.pytorch.org/whl/cpu torch \
     && pip install -e ".[dev]"
 
 COPY . .

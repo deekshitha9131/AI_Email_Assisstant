@@ -1,110 +1,123 @@
-import asyncio
-from collections.abc import Callable
-from functools import lru_cache
-from typing import TYPE_CHECKING, Any
+import math
+from collections.abc import Sequence
+from typing import Any
 
-import structlog
+import httpx
 
-if TYPE_CHECKING:
-    from sentence_transformers import SentenceTransformer
-
+from app.core.config import Settings, get_settings
 from app.core.constants import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL_NAME
 from app.domain.exceptions.ai import EmbeddingProviderError
 
-logger = structlog.get_logger(__name__)
+_HF_INFERENCE_URL = (
+    "https://router.huggingface.co/hf-inference/models/"
+    f"{EMBEDDING_MODEL_NAME}/pipeline/feature-extraction"
+)
+_HTTP_TIMEOUT_SECONDS = 30.0
 
 
-@lru_cache(maxsize=1)
-def _load_model() -> "SentenceTransformer":
-    """Load the sentence-transformers model once and cache it for reuse.
-
-    Importing sentence-transformers at module import time is extremely expensive
-    because it eagerly loads the full Hugging Face model registry; we defer that
-    import until the embedding path is actually used.
-
-    The model is downloaded on first use and cached locally by the
-    sentence-transformers library (~/.cache/torch/sentence_transformers).
-    Subsequent calls return the same in-memory instance.
-    """
-    logger.info("embedding_model_loading", model=EMBEDDING_MODEL_NAME)
-    try:
-        from sentence_transformers import SentenceTransformer
-
-        model = SentenceTransformer(EMBEDDING_MODEL_NAME)
-    except Exception as exc:
-        raise EmbeddingProviderError(
-            f"Failed to load embedding model {EMBEDDING_MODEL_NAME!r}: {exc}"
-        ) from exc
-    logger.info("embedding_model_loaded", model=EMBEDDING_MODEL_NAME)
-    return model
+def _create_http_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS)
 
 
 class EmbeddingService:
-    """Local embedding service using sentence-transformers.
+    """Create normalized embeddings through Hugging Face Inference Providers."""
 
-    Replaces the previous OpenAI-based implementation. The model
-    (all-MiniLM-L6-v2) runs locally — no API key, no HTTP requests
-    to OpenAI, no usage quota.
-
-    The model is loaded once (lazily, on first embed call) and reused
-    for all subsequent requests via a module-level cache.
-    """
-
-    def __init__(self, model_loader: Callable[[], Any] | None = None) -> None:
-        self._model_loader = model_loader or _load_model
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._settings = settings or get_settings()
+        self._http_client = http_client
 
     def _validate_dimensions(self, embedding: list[float]) -> None:
         if len(embedding) != EMBEDDING_DIMENSIONS:
             raise EmbeddingProviderError(
                 f"Embedding model returned {len(embedding)} dimensions, "
-                f"expected {EMBEDDING_DIMENSIONS}. This indicates a model "
-                "mismatch — check EMBEDDING_MODEL_NAME in app/core/constants.py."
+                f"expected {EMBEDDING_DIMENSIONS}."
             )
 
     async def embed_text(self, text: str) -> list[float]:
         """Embed a single piece of text — used for retrieval queries."""
-        loop = asyncio.get_running_loop()
-        try:
-            embedding = await loop.run_in_executor(
-                None, self._embed_text_sync, text
-            )
-        except EmbeddingProviderError:
-            raise
-        except Exception as exc:
-            raise EmbeddingProviderError(
-                f"Local embedding failed: {exc}"
-            ) from exc
-
-        self._validate_dimensions(embedding)
-        return embedding
+        return (await self.embed_texts([text]))[0]
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of texts — used for indexing email chunks."""
         if not texts:
             return []
 
-        loop = asyncio.get_running_loop()
-        try:
-            embeddings = await loop.run_in_executor(
-                None, self._embed_texts_sync, texts
-            )
-        except EmbeddingProviderError:
-            raise
-        except Exception as exc:
+        token = self._settings.hf_token.strip()
+        if not token:
             raise EmbeddingProviderError(
-                f"Local batch embedding failed: {exc}"
+                "HF_TOKEN is not configured. Set it in the backend environment."
+            )
+
+        headers = {"Authorization": f"Bearer {token}"}
+        payload = {"inputs": texts, "parameters": {"normalize": True}}
+        try:
+            if self._http_client is not None:
+                response = await self._http_client.post(
+                    _HF_INFERENCE_URL, headers=headers, json=payload
+                )
+            else:
+                async with _create_http_client() as client:
+                    response = await client.post(
+                        _HF_INFERENCE_URL, headers=headers, json=payload
+                    )
+        except httpx.TimeoutException as exc:
+            raise EmbeddingProviderError(
+                "The Hugging Face embedding request timed out."
+            ) from exc
+        except httpx.RequestError as exc:
+            raise EmbeddingProviderError(
+                "Could not connect to the Hugging Face Inference API."
             ) from exc
 
+        if not response.is_success:
+            raise EmbeddingProviderError(
+                f"The Hugging Face Inference API returned HTTP {response.status_code}."
+            )
+
+        try:
+            result: Any = response.json()
+        except ValueError as exc:
+            raise EmbeddingProviderError(
+                "The Hugging Face Inference API returned invalid JSON."
+            ) from exc
+
+        if (
+            not isinstance(result, list)
+            or len(result) != len(texts)
+            or any(not isinstance(vector, list) for vector in result)
+        ):
+            raise EmbeddingProviderError(
+                "The Hugging Face Inference API returned an unexpected embedding response."
+            )
+
+        embeddings = [self._normalize_embedding(vector) for vector in result]
         for embedding in embeddings:
             self._validate_dimensions(embedding)
         return embeddings
 
-    def _embed_text_sync(self, text: str) -> list[float]:
-        model = self._model_loader()
-        vector = model.encode(text, normalize_embeddings=True)
-        return vector.tolist()
+    def _normalize_embedding(self, values: Sequence[object]) -> list[float]:
+        try:
+            if any(isinstance(value, bool) for value in values):
+                raise TypeError("Boolean values are not valid embedding coordinates.")
+            embedding = [float(value) for value in values]
+        except (TypeError, ValueError) as exc:
+            raise EmbeddingProviderError(
+                "The Hugging Face Inference API returned non-numeric embedding values."
+            ) from exc
 
-    def _embed_texts_sync(self, texts: list[str]) -> list[list[float]]:
-        model = self._model_loader()
-        vectors = model.encode(texts, normalize_embeddings=True)
-        return [v.tolist() for v in vectors]
+        if not all(math.isfinite(value) for value in embedding):
+            raise EmbeddingProviderError(
+                "The Hugging Face Inference API returned non-finite embedding values."
+            )
+
+        magnitude = math.sqrt(sum(value * value for value in embedding))
+        if magnitude == 0:
+            raise EmbeddingProviderError(
+                "The Hugging Face Inference API returned a zero-length embedding vector."
+            )
+
+        return [value / magnitude for value in embedding]
