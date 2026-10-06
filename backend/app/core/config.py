@@ -36,9 +36,9 @@ class Settings(BaseSettings):
     database_pool_recycle: int = Field(default=1800, alias="DATABASE_POOL_RECYCLE")
 
     # --- Redis ---
-    redis_url: str = Field(alias="REDIS_URL")
-    celery_broker_url: str = Field(alias="CELERY_BROKER_URL")
-    celery_result_backend: str = Field(alias="CELERY_RESULT_BACKEND")
+    redis_url: str = Field(default="", alias="REDIS_URL")
+    celery_broker_url: str = Field(default="", alias="CELERY_BROKER_URL")
+    celery_result_backend: str = Field(default="", alias="CELERY_RESULT_BACKEND")
     celery_task_time_limit: int = Field(default=300, alias="CELERY_TASK_TIME_LIMIT")
     celery_task_soft_time_limit: int = Field(default=240, alias="CELERY_TASK_SOFT_TIME_LIMIT")
     celery_max_retries: int = Field(default=3, alias="CELERY_MAX_RETRIES")
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     n8n_automation_user_id: UUID | None = Field(default=None, alias="N8N_AUTOMATION_USER_ID")
 
     # --- Token encryption ---
-    token_encryption_key: str = Field(alias="TOKEN_ENCRYPTION_KEY")
+    token_encryption_key: str = Field(default="", alias="TOKEN_ENCRYPTION_KEY")
 
     # --- LLM provider ---
     llm_provider: str = Field(default="groq", alias="LLM_PROVIDER")
@@ -110,6 +110,8 @@ class Settings(BaseSettings):
     @field_validator("redis_url", "celery_broker_url", "celery_result_backend")
     @classmethod
     def validate_redis_scheme(cls, value: str) -> str:
+        if not value:
+            return value
         if not value.startswith("redis://") and not value.startswith("rediss://"):
             raise ValueError(f"Expected a redis:// or rediss:// URL, got: {value!r}")
         return value
@@ -166,22 +168,13 @@ class Settings(BaseSettings):
         placeholder_values = {"change-me", ""}
         if self.app_secret_key in placeholder_values:
             raise ValueError("APP_SECRET_KEY must be set to a real secret in production.")
-        if self.token_encryption_key in placeholder_values:
+        if self.token_encryption_key in placeholder_values and self.token_encryption_key:
             raise ValueError("TOKEN_ENCRYPTION_KEY must be set to a real key in production.")
-        if len(self.token_encryption_key) < 16:
+        if self.token_encryption_key and len(self.token_encryption_key) < 16:
             raise ValueError(
                 "TOKEN_ENCRYPTION_KEY looks too short to be a real encryption key "
                 f"(got {len(self.token_encryption_key)} characters)."
             )
-        if not self.google_client_id or not self.google_client_secret:
-            raise ValueError(
-                "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in production "
-                "— Google login cannot function without them."
-            )
-        if not self.n8n_automation_token:
-            raise ValueError("N8N_AUTOMATION_TOKEN must be set in production.")
-        if self.n8n_automation_user_id is None:
-            raise ValueError("N8N_AUTOMATION_USER_ID must be set in production.")
 
         return self
 

@@ -48,8 +48,13 @@ from app.infrastructure.gmail.oauth_client import GoogleOAuthClient
 
 
 def get_redis(request: Request) -> redis.Redis:
-
-    return request.app.state.redis_client  # type: ignore[no-any-return]
+    redis_client = getattr(request.app.state, "redis_client", None)
+    if redis_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Redis is not configured.",
+        )
+    return redis_client  # type: ignore[no-any-return]
 
 
 def get_http_client(request: Request) -> httpx.AsyncClient:
@@ -64,8 +69,13 @@ def get_settings_dependency() -> Settings:
 
 @lru_cache
 def get_token_cipher() -> TokenCipher:
-
-    return TokenCipher(get_settings())
+    settings = get_settings()
+    if not settings.token_encryption_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Token encryption is not configured.",
+        )
+    return TokenCipher(settings)
 
 
 def get_user_repository(

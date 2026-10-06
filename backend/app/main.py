@@ -48,7 +48,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.db_engine = engine
     app.state.db_session_factory = create_session_factory(engine)
 
-    redis_client = create_redis_client(settings)
+    redis_client = create_redis_client(settings) if settings.redis_url else None
     app.state.redis_client = redis_client
 
     http_client = httpx.AsyncClient(timeout=10.0)
@@ -60,7 +60,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("shutdown_begin")
 
     await http_client.aclose()
-    await close_redis_client(redis_client)
+    if redis_client is not None:
+        await close_redis_client(redis_client)
     await dispose_engine(engine)
 
     logger.info("shutdown_complete")

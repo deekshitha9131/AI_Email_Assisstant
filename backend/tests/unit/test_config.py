@@ -26,10 +26,13 @@ BASE_VALID_ENV = {
 }
 
 
-def _build_settings(monkeypatch: pytest.MonkeyPatch, **overrides: str) -> Settings:
+def _build_settings(monkeypatch: pytest.MonkeyPatch, **overrides: str | None) -> Settings:
     env = {**BASE_VALID_ENV, **overrides}
     for key, value in env.items():
-        monkeypatch.setenv(key, value)
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
     return Settings(_env_file=None)  # type: ignore[call-arg]
 
 
@@ -54,17 +57,26 @@ def test_valid_production_config_succeeds(monkeypatch: pytest.MonkeyPatch) -> No
     assert settings.is_production is True
 
 
-def test_production_requires_google_oauth_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(ValidationError):
-        _build_settings(
-            monkeypatch,
-            APP_ENV="production",
-            APP_DEBUG="false",
-            APP_SECRET_KEY="a-real-production-secret",
-            TOKEN_ENCRYPTION_KEY="a-real-production-token-key",
-            GOOGLE_CLIENT_ID="",
-            GOOGLE_CLIENT_SECRET="",
-        )
+def test_production_can_start_without_optional_integrations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _build_settings(
+        monkeypatch,
+        APP_ENV="production",
+        APP_DEBUG="false",
+        APP_SECRET_KEY="a-real-production-secret",
+        REDIS_URL="",
+        CELERY_BROKER_URL="",
+        CELERY_RESULT_BACKEND="",
+        TOKEN_ENCRYPTION_KEY="",
+        GOOGLE_CLIENT_ID="",
+        GOOGLE_CLIENT_SECRET="",
+        N8N_AUTOMATION_TOKEN="",
+        N8N_AUTOMATION_USER_ID=None,
+    )
+    assert settings.redis_url == ""
+    assert settings.token_encryption_key == ""
+    assert settings.google_client_id == ""
 
 
 def test_invalid_app_env_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
